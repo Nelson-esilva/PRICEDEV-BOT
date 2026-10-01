@@ -1,0 +1,12 @@
+---
+description: Como o agente deve trabalhar neste projeto — sem browser, sem loop de testes/build
+alwaysApply: true
+---
+
+# Fluxo de trabalho
+
+- Nunca abrir o navegador deste ambiente (MCP/browser da IDE, Playwright, screenshots de UI).
+- Não ficar preso em testes unitários: implemente, ajuste o que for óbvio, e siga. Só rode pytest quando o usuário pedir ou quando um teste que você tocou estiver claramente quebrado.
+- Não rode build, lint, typecheck, pytest da suíte inteira, curl de verificação ou smoke de API a cada alteração.
+- Confirme UI só se o usuário pedir, e sem abrir o browser da IDE.
+- Prefira explicar o que mudou; não transforme cada mudança em um ciclo de verificação.
