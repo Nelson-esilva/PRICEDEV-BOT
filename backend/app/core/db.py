@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import DateTime, TypeDecorator
 from sqlalchemy import inspect, text
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import get_settings
+
+_ASYNCPG_DROP = {"channel_binding"}
 
 
 class UTCDateTime(TypeDecorator):
@@ -22,7 +25,6 @@ class UTCDateTime(TypeDecorator):
 
     def process_result_value(self, value, dialect):
         return as_utc(value)
-
 
 class Base(DeclarativeBase):
     pass
@@ -44,14 +46,43 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def normalize_database_url(url: str) -> str:
+    """Neon/psql colam parâmetros que o asyncpg não aceita (ex.: channel_binding)."""
+    raw = (url or "").strip()
+    if not raw or raw.startswith("sqlite"):
+        return raw
+    parts = urlsplit(raw)
+    scheme = parts.scheme
+    if scheme in {"postgres", "postgresql"}:
+        scheme = "postgresql+asyncpg"
+    query: list[tuple[str, str]] = []
+    seen_ssl = False
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        low = key.lower()
+        if low in _ASYNCPG_DROP:
+            continue
+        if low == "ssl":
+            seen_ssl = True
+            query.append((key, value))
+            continue
+        if low == "sslmode":
+            if not seen_ssl:
+                query.append(("ssl", value))
+                seen_ssl = True
+            continue
+        query.append((key, value))
+    return urlunsplit((scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
+        database_url = normalize_database_url(settings.database_url)
         kwargs: dict = {"echo": False}
-        if settings.database_url.startswith("sqlite"):
+        if database_url.startswith("sqlite"):
             kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
-        _engine = create_async_engine(settings.database_url, **kwargs)
+        _engine = create_async_engine(database_url, **kwargs)
     return _engine
 
 
