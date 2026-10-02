@@ -59,6 +59,13 @@ function categoryOf(item: Opportunity) {
   return CATEGORIES.find((cat) => cat.keys?.some((key) => name.includes(key)))?.id ?? "";
 }
 
+function priceHowto(item: Opportunity) {
+  const parts: string[] = [];
+  if (item.coupon_code) parts.push(`Cupom ${item.coupon_code}`);
+  if (item.payment_hint) parts.push(item.payment_hint);
+  return parts.join(" + ");
+}
+
 function relative(iso: string | null) {
   if (!iso) return "";
   const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
@@ -252,14 +259,19 @@ export default function App() {
                           )}
                           {old != null && <s>{money(old)}</s>}
                         </p>
-                        {item.coupon_code && (
-                          <div className="coupon">
-                            <span>Cupom {item.coupon_code}</span>
-                            <button type="button" onClick={() => void copyCoupon(item.coupon_code!)}>
-                              {copied === item.coupon_code ? "copiado" : "copiar"}
+                        {priceHowto(item) ? (
+                          item.coupon_code ? (
+                            <button
+                              type="button"
+                              className="howto"
+                              onClick={() => void copyCoupon(item.coupon_code!)}
+                            >
+                              {copied === item.coupon_code ? "copiado" : priceHowto(item)}
                             </button>
-                          </div>
-                        )}
+                          ) : (
+                            <p className="howto">{priceHowto(item)}</p>
+                          )
+                        ) : null}
                         <div className="foot">
                           <span>{relative(item.source_created_at || item.observed_at)}</span>
                           {item.purchase_url ? (

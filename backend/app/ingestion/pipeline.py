@@ -41,6 +41,7 @@ def _display_fields(offer: NormalizedOffer) -> dict:
         "image_url": sanitize_media_url(offer.image_url),
         "description": offer.description,
         "coupon_code": offer.coupon_code,
+        "payment_hint": offer.payment_hint,
         "temperature": offer.temperature,
         "free_shipping": offer.free_shipping,
         "comment_count": offer.comment_count,

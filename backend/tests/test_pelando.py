@@ -81,6 +81,7 @@ def test_normalize_fixtures_never_uses_redirect_and_never_verifies_price():
     assert first.temperature == 412
     assert first.image_url == "https://media.pelando.com.br/bbb=/0x300/filters:format(webp)/s/ssd.png"
     assert first.coupon_code == "SSD10"
+    assert first.payment_hint is None
     assert first.free_shipping is True
     assert first.description == "SSD em promoção"
     assert sanitize_purchase_url("https://dpl.pelando.com.br/abc") is None
@@ -91,6 +92,96 @@ def test_normalize_fixtures_never_uses_redirect_and_never_verifies_price():
     assert ml.merchant_name == "Mercado Livre"
     assert ml.purchase_url and "mercadolivre.com.br" in ml.purchase_url
     assert ml.effective_price is not None
+
+
+def test_howto_from_deal_html_and_coupon():
+    from app.sources.pelando import _merge_deal_detail, _payment_hint, _plain_text
+
+    html = "<p>R$ 275 no Pix</p><p>Use o Cupom: MODAML + Selecione Pix</p>"
+    assert _plain_text(html) == "R$ 275 no Pix Use o Cupom: MODAML + Selecione Pix"
+    assert _payment_hint(_plain_text(html)) == "Pix"
+    source = PelandoSource(Settings(enable_pelando=False))
+    offers = source.normalize_payload(
+        {
+            "data": {
+                "deals": [
+                    {
+                        "id": "nike-1",
+                        "title": "Tênis Nike SB Force 58",
+                        "kind": "promotion",
+                        "status": "active",
+                        "price": 275,
+                        "sourceUrl": "https://www.mercadolivre.com.br/social/abc?forceInApp=true",
+                        "store": {"id": "921", "name": "Mercado Livre", "slug": "mercado-livre"},
+                    }
+                ]
+            }
+        },
+        fetched_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    assert offers[0].coupon_code is None
+    merged = _merge_deal_detail(
+        offers[0],
+        {
+            "couponCode": "MODAML",
+            "shortDescription": html,
+            "sourceUrl": "https://produto.mercadolivre.com.br/MLB-5388126802-tenis-_JM",
+        },
+    )
+    assert merged.coupon_code == "MODAML"
+    assert merged.payment_hint == "Pix"
+    assert merged.purchase_url and "MLB-5388126802" in merged.purchase_url
+
+
+async def test_enrich_details_fills_coupon_from_deal_endpoint():
+    feed = {
+        "data": {
+            "deals": [
+                {
+                    "id": "nike-1",
+                    "title": "Tênis Nike SB Force 58",
+                    "kind": "promotion",
+                    "status": "active",
+                    "price": 275,
+                    "createdAt": "2026-10-01T12:00:00Z",
+                    "sourceUrl": "https://www.mercadolivre.com.br/social/abc?forceInApp=true",
+                    "store": {"id": "921", "name": "Mercado Livre", "slug": "mercado-livre"},
+                }
+            ],
+            "pageInfo": {"hasNextPage": False},
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("robots.txt"):
+            return httpx.Response(404, text="missing")
+        if path.endswith("/deals/nike-1"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "couponCode": "MODAML",
+                        "shortDescription": "<p>R$ 275 no Pix</p><p>Use o Cupom: MODAML</p>",
+                        "sourceUrl": "https://www.mercadolivre.com.br/tenis/p/MLB5388126802",
+                    }
+                },
+            )
+        if "/feed/v2/" in path:
+            return httpx.Response(200, json=feed)
+        if path.endswith("/stores/search"):
+            return httpx.Response(200, json={"data": {"stores": []}})
+        return httpx.Response(200, json={"data": {"deals": [], "pageInfo": {}}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    source = PelandoSource(
+        Settings(enable_pelando=True, pelando_feed_pages=1, pelando_deal_details_per_poll=5),
+        client=client,
+    )
+    offers = await source.poll()
+    nike = next(item for item in offers if item.source_record_id == "nike-1")
+    assert nike.coupon_code == "MODAML"
+    assert nike.payment_hint == "Pix"
 
 
 def test_disabled_pelando_does_not_poll():

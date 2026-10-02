@@ -86,6 +86,7 @@ def _add_missing_columns(connection) -> None:
         "image_url": "TEXT",
         "description": "TEXT",
         "coupon_code": "VARCHAR(128)",
+        "payment_hint": "VARCHAR(64)",
         "temperature": "INTEGER",
         "free_shipping": "BOOLEAN",
         "comment_count": "INTEGER",

@@ -309,25 +309,19 @@ button, a { font-family: inherit; }
 }
 .price strong { font-size: 16px; letter-spacing: -0.03em; }
 .price s { color: #9ca3af; font-size: 12px; }
-.coupon {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border: 1px dashed #f4b183;
-  background: var(--orange-soft);
-  color: #c2410c;
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 13px;
-  font-weight: 700;
-}
-.coupon button {
+.howto {
+  display: block;
+  margin: 0 0 8px;
+  padding: 0;
   border: 0;
   background: none;
-  color: #c2410c;
-  cursor: pointer;
+  color: var(--green-dark);
+  font-size: 12px;
   font-weight: 700;
+  text-align: left;
+  cursor: pointer;
 }
+p.howto { cursor: default; }
 .foot {
   margin-top: auto;
   display: flex;

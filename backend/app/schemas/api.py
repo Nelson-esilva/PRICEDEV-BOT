@@ -44,6 +44,7 @@ class OpportunityOut(BaseModel):
     image_url: str | None = None
     description: str | None = None
     coupon_code: str | None = None
+    payment_hint: str | None = None
     temperature: int | None = None
     free_shipping: bool | None = None
     comment_count: int | None = None

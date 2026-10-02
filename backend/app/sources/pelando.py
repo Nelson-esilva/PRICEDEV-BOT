@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import datetime
 from decimal import Decimal
+from html import unescape
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
@@ -61,6 +63,7 @@ class PelandoSource(SourceConnector):
         self._owns_client = client is None
         self._robots_ok_until = 0.0
         self._store_ids: dict[str, str] = {}
+        self._detailed_ids: set[str] = set()
 
     def is_enabled(self) -> bool:
         return self.settings.enable_pelando
@@ -103,10 +106,34 @@ class PelandoSource(SourceConnector):
                 seen.add(offer.source_record_id)
                 offers.append(offer)
         offers.sort(key=lambda row: row.source_created_at or row.fetched_at, reverse=True)
+        await self._enrich_details(offers)
         return offers
+
+    async def fetch_deal(self, deal_id: str) -> dict[str, Any]:
+        return await self._get(f"/deals/{deal_id}", {})
 
     async def fetch_recents(self) -> dict[str, Any]:
         return await self.fetch_feed("recents")
+
+    async def _enrich_details(self, offers: list[NormalizedOffer]) -> None:
+        budget = max(0, self.settings.pelando_deal_details_per_poll)
+        if budget == 0:
+            return
+        for index, offer in enumerate(offers):
+            if budget <= 0:
+                break
+            if not _needs_detail(offer) or offer.source_record_id in self._detailed_ids:
+                continue
+            try:
+                payload = await self.fetch_deal(offer.source_record_id)
+            except (SourceError, SourceBlocked) as exc:
+                log.warning("pelando_deal_detail_skip", deal_id=offer.source_record_id, error=str(exc))
+                self._detailed_ids.add(offer.source_record_id)
+                continue
+            raw = _deal_body(payload)
+            offers[index] = _merge_deal_detail(offer, raw)
+            self._detailed_ids.add(offer.source_record_id)
+            budget -= 1
 
     async def fetch_search(
         self,
@@ -250,10 +277,10 @@ class PelandoSource(SourceConnector):
                 temperature = int(temp)
         except (TypeError, ValueError):
             temperature = None
-        coupon = raw.get("couponCode") or raw.get("coupon_code")
-        if isinstance(coupon, str) and not coupon.strip():
-            coupon = None
-        desc = raw.get("shortDescription") or raw.get("short_description")
+        coupon = _coupon_code(raw.get("couponCode") or raw.get("coupon_code"))
+        desc = _plain_text(raw.get("shortDescription") or raw.get("short_description") or raw.get("description"))
+        if not coupon:
+            coupon = _coupon_from_text(desc)
         comments = raw.get("commentCount") or raw.get("comment_count")
         return NormalizedOffer(
             source=self.name,
@@ -275,8 +302,9 @@ class PelandoSource(SourceConnector):
             fetched_at=fetched_at,
             purchase_url=purchase,
             image_url=_best_image(raw),
-            description=str(desc).strip() if isinstance(desc, str) and desc.strip() else None,
-            coupon_code=str(coupon).strip() if isinstance(coupon, str) else None,
+            description=desc,
+            coupon_code=coupon,
+            payment_hint=_payment_hint(desc),
             free_shipping=raw.get("freeShipping") if isinstance(raw.get("freeShipping"), bool) else None,
             comment_count=int(comments) if isinstance(comments, int) else None,
             temperature=temperature,
@@ -289,6 +317,7 @@ class PelandoSource(SourceConnector):
                 "store": merchant_name,
                 "imageUrl": raw.get("imageUrl"),
                 "couponCode": coupon,
+                "paymentHint": _payment_hint(desc),
             },
         ).quantized()
 
@@ -353,3 +382,115 @@ def _parse_dt(value) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+_HTML_TAG = re.compile(r"<[^>]+>")
+_COUPON_IN_TEXT = re.compile(r"(?:cupom|use o cupom)\s*[:\-]?\s*([A-Za-z0-9]{4,24})", re.I)
+_COUPON_STOP = {
+    "ABAIXO",
+    "PRODUTO",
+    "CODIGO",
+    "AQUI",
+    "DESCONTO",
+    "CUPOM",
+    "SELECIONE",
+    "PIX",
+    "BOLETO",
+}
+
+
+def _deal_body(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data", payload)
+    if isinstance(data, dict) and isinstance(data.get("deal"), dict):
+        return data["deal"]
+    return data if isinstance(data, dict) else {}
+
+
+def _plain_text(value) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
+    text = re.sub(r"</p>", "\n", text, flags=re.I)
+    text = _HTML_TAG.sub(" ", text)
+    text = unescape(text)
+    text = " ".join(text.split())
+    return text or None
+
+
+def _coupon_code(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    code = value.strip()
+    if not code or " " in code or len(code) > 32:
+        return None
+    return code
+
+
+def _coupon_from_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = _COUPON_IN_TEXT.search(value)
+    if not match:
+        return None
+    code = match.group(1).strip()
+    if code.upper() in _COUPON_STOP:
+        return None
+    return code
+
+
+def _payment_hint(value: str | None) -> str | None:
+    if not value:
+        return None
+    low = value.lower()
+    if re.search(r"\bpix\b", low):
+        return "Pix"
+    if "boleto" in low:
+        return "Boleto"
+    return None
+
+
+def _weak_purchase_url(url: str | None) -> bool:
+    if not url:
+        return True
+    low = url.lower()
+    return "/social/" in low or "forceinapp=" in low or "origin=copy_link" in low
+
+
+def _needs_detail(offer: NormalizedOffer) -> bool:
+    if not offer.coupon_code or not offer.payment_hint:
+        return True
+    return _weak_purchase_url(offer.purchase_url)
+
+
+def _merge_deal_detail(offer: NormalizedOffer, raw: dict[str, Any]) -> NormalizedOffer:
+    if not isinstance(raw, dict):
+        return offer
+    coupon = _coupon_code(raw.get("couponCode") or raw.get("coupon_code")) or offer.coupon_code
+    desc = (
+        _plain_text(raw.get("shortDescription") or raw.get("short_description") or raw.get("description"))
+        or offer.description
+    )
+    if not coupon:
+        coupon = _coupon_from_text(desc)
+    hint = _payment_hint(" ".join(part for part in (desc, offer.description) if part)) or offer.payment_hint
+    purchase = sanitize_purchase_url(raw.get("sourceUrl") or raw.get("source_url"))
+    url = offer.purchase_url
+    marketplace = offer.marketplace
+    if purchase and _weak_purchase_url(url):
+        url = purchase
+        marketplace = infer_marketplace(url, marketplace)
+    payload = dict(offer.raw_payload or {})
+    payload["couponCode"] = coupon
+    payload["paymentHint"] = hint
+    return offer.model_copy(
+        update={
+            "coupon_code": coupon,
+            "payment_hint": hint,
+            "description": desc,
+            "purchase_url": url,
+            "marketplace": marketplace,
+            "raw_payload": payload,
+        }
+    ).quantized()

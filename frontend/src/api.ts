@@ -17,6 +17,7 @@ export type Opportunity = {
   image_url: string | null;
   description: string | null;
   coupon_code: string | null;
+  payment_hint: string | null;
   temperature: number | null;
   free_shipping: boolean | null;
   comment_count: number | null;

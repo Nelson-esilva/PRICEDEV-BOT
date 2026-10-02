@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     pelando_poll_seconds: int = 15
     pelando_feed_pages: int = 4
+    pelando_deal_details_per_poll: int = 20
     pelando_base_url: str = "https://api-web.pelando.com.br"
     pelando_user_agent: str = "PriceDevBot/0.1 (+local-dev)"
 

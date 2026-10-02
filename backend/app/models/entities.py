@@ -149,6 +149,7 @@ class Opportunity(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     coupon_code: Mapped[str | None] = mapped_column(String(128))
+    payment_hint: Mapped[str | None] = mapped_column(String(64))
     temperature: Mapped[int | None] = mapped_column(Integer)
     free_shipping: Mapped[bool | None] = mapped_column(Boolean)
     comment_count: Mapped[int | None] = mapped_column(Integer)
