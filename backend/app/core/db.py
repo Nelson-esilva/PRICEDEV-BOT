@@ -126,6 +126,21 @@ def _add_missing_columns(connection) -> None:
     for name, ddl in extras.items():
         if name not in existing:
             connection.execute(text(f"ALTER TABLE opportunities ADD COLUMN {name} {ddl}"))
+    if "products" in inspector.get_table_names():
+        product_cols = {col["name"] for col in inspector.get_columns("products")}
+        product_extras = {
+            "held_price": "NUMERIC(14,2)",
+            "held_count": "INTEGER DEFAULT 0",
+        }
+        for name, ddl in product_extras.items():
+            if name not in product_cols:
+                connection.execute(text(f"ALTER TABLE products ADD COLUMN {name} {ddl}"))
+    if "inbox_messages" in inspector.get_table_names():
+        inbox_cols = {col["name"] for col in inspector.get_columns("inbox_messages")}
+        if "image_url" not in inbox_cols:
+            connection.execute(text("ALTER TABLE inbox_messages ADD COLUMN image_url TEXT"))
+        if "affiliate_url" not in inbox_cols:
+            connection.execute(text("ALTER TABLE inbox_messages ADD COLUMN affiliate_url TEXT"))
 
 
 def reset_engine() -> None:

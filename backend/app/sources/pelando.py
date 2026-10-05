@@ -20,29 +20,11 @@ from app.core.urls import sanitize_media_url, sanitize_purchase_url
 from app.ingestion.identity import infer_marketplace
 from app.schemas.normalized import IdentityConfidence, NormalizedOffer
 from app.sources.base import SourceBlocked, SourceConnector, SourceError
+from app.sources.rate import TokenBucket
 
 log = get_logger("pelando")
 
 CHALLENGE_MARKERS = ("just a moment", "sorry, you have been blocked", "cf-browser-verification")
-
-
-class TokenBucket:
-    def __init__(self, rps: float = 1.0) -> None:
-        self.rate = max(0.1, rps)
-        self.tokens = 1.0
-        self.updated_at = time.monotonic()
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        async with self._lock:
-            while True:
-                now = time.monotonic()
-                self.tokens = min(1.0, self.tokens + (now - self.updated_at) * self.rate)
-                self.updated_at = now
-                if self.tokens >= 1:
-                    self.tokens -= 1
-                    return
-                await asyncio.sleep((1 - self.tokens) / self.rate)
 
 
 class PelandoSource(SourceConnector):
@@ -92,9 +74,10 @@ class PelandoSource(SourceConnector):
         pages = self.settings.pelando_feed_pages
         payloads: list[dict[str, Any]] = []
         payloads.extend(await self._paged("recents", pages=pages))
-        ml_id = await self._store_id("mercado-livre")
-        if ml_id:
-            payloads.extend(await self._paged("recents", pages=pages, store_id=ml_id))
+        for slug in ("mercado-livre", "kabum", "amazon", "magazine-luiza", "shopee"):
+            store_id = await self._store_id(slug)
+            if store_id:
+                payloads.extend(await self._paged("recents", pages=max(2, pages // 2), store_id=store_id))
         for feed in ("hottest", "last-commented"):
             payloads.extend(await self._paged(feed, pages=max(2, pages // 2)))
         seen: set[str] = set()

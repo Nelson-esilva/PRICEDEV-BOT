@@ -52,6 +52,8 @@ class Product(Base):
     condition: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
     category: Mapped[str | None] = mapped_column(String(128))
     merchant_name: Mapped[str | None] = mapped_column(String(256))
+    held_price: Mapped[Decimal | None] = mapped_column(Money)
+    held_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -206,6 +208,51 @@ class SourceMetricSample(Base):
     processing_latency_seconds: Mapped[float | None] = mapped_column()
     total_observable_latency_seconds: Mapped[float | None] = mapped_column()
     within_slo: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class WatchlistItem(Base):
+    __tablename__ = "watchlist_items"
+    __table_args__ = (UniqueConstraint("url", name="uq_watchlist_url"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    marketplace: Mapped[str] = mapped_column(String(64), default="unknown", nullable=False)
+    native_product_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    product_name: Mapped[str | None] = mapped_column(String(512))
+    target_price: Mapped[Decimal | None] = mapped_column(Money)
+    last_price: Mapped[Decimal | None] = mapped_column(Money)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    consecutive_errors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class InboxMessage(Base):
+    """Post de grupo Telegram/WhatsApp. Não entra na vitrine de ofertas."""
+
+    __tablename__ = "inbox_messages"
+    __table_args__ = (
+        UniqueConstraint("channel", "chat_id", "message_id", name="uq_inbox_message"),
+        Index("ix_inbox_posted", "posted_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    chat_title: Mapped[str] = mapped_column(String(256), default="", nullable=False)
+    message_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    body: Mapped[str | None] = mapped_column(Text)
+    purchase_url: Mapped[str | None] = mapped_column(Text)
+    marketplace: Mapped[str] = mapped_column(String(64), default="unknown", nullable=False)
+    native_product_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    affiliate_url: Mapped[str | None] = mapped_column(Text)
+    posted_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    raw_payload: Mapped[dict | None] = mapped_column(JSON)
 
 
 class PublicationLog(Base):

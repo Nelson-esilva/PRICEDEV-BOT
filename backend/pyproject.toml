@@ -19,6 +19,7 @@ dependencies = [
     "alembic>=1.13",
     "structlog>=24.1",
     "python-dotenv>=1.0",
+    "telethon>=1.36",
 ]
 
 [project.optional-dependencies]

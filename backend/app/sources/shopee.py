@@ -213,6 +213,12 @@ class ShopeeSource(SourceConnector):
         announced = node.get("priceDiscountRate")
         announced_pct = money(announced) if announced is not None else None
         shop_id = str(node.get("shopId") or "")
+        if self.settings.shopee_official_shops_only:
+            shop_type = node.get("shopType")
+            types = shop_type if isinstance(shop_type, list) else [shop_type]
+            official = {1, "1", "mall", "official"}
+            if not any(item in official for item in types):
+                return None
         return NormalizedOffer(
             source=self.name,
             source_record_id=native,

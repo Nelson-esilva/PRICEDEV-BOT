@@ -21,8 +21,15 @@ class Settings(BaseSettings):
 
     enable_pelando: bool = False
     enable_shopee: bool = False
+    enable_mercadolivre: bool = True
+    enable_magalu: bool = True
+    enable_kabum: bool = True
     enable_lomadee: bool = False
+    enable_price_confirm: bool = True
+    enable_watchlist: bool = True
     enable_telegram_publish: bool = False
+    enable_channel_inbox: bool = False
+    enable_ml_hub: bool = True
 
     pelando_poll_seconds: int = 15
     pelando_feed_pages: int = 4
@@ -34,12 +41,36 @@ class Settings(BaseSettings):
     shopee_app_id: str = ""
     shopee_app_secret: str = ""
     shopee_keywords: str = "ssd,air fryer,monitor gamer,fone bluetooth,smartwatch"
+    discovery_keywords: str = ""
+    kabum_keywords: str = ""
+    kabum_keywords_per_poll: int = 8
+
+    mercadolivre_poll_seconds: int = 45
+    magalu_poll_seconds: int = 180
+    kabum_poll_seconds: int = 90
+    lomadee_poll_seconds: int = 180
+    price_confirm_per_poll: int = 8
+    watchlist_poll_seconds: int = 30
+    watchlist_batch: int = 12
+    shopee_official_shops_only: bool = False
 
     lomadee_app_token: str = ""
     lomadee_source_id: str = ""
+    ml_affiliate_matt_word: str = ""
+    ml_affiliate_matt_tool: str = ""
+    ml_affiliate_cookie: str = ""
+    amazon_affiliate_tag: str = ""
+    ml_hub_poll_seconds: int = 120
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    telegram_publish_chat: str = ""
+    telegram_publish_per_poll: int = 4
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
+    telegram_session_path: str = "./telegram_inbox.session"
+    telegram_inbox_chats: str = ""
+    telegram_inbox_backfill: int = 40
 
     min_historical_discount_pct: float = 20
     min_acceptance_score: int = 75
@@ -63,6 +94,23 @@ class Settings(BaseSettings):
     @property
     def shopee_keyword_list(self) -> list[str]:
         return [k.strip() for k in self.shopee_keywords.split(",") if k.strip()]
+
+    @property
+    def discovery_keyword_list(self) -> list[str]:
+        raw = self.discovery_keywords or self.shopee_keywords
+        return [k.strip() for k in raw.split(",") if k.strip()]
+
+    @property
+    def telegram_inbox_chat_list(self) -> list[str]:
+        return [item.strip() for item in self.telegram_inbox_chats.split(",") if item.strip()]
+
+    @property
+    def kabum_keyword_list(self) -> list[str]:
+        if self.kabum_keywords.strip():
+            return [k.strip() for k in self.kabum_keywords.split(",") if k.strip()]
+        from app.sources.kabum import DEFAULT_KEYWORDS
+
+        return list(DEFAULT_KEYWORDS)
 
     @property
     def score_weights(self) -> dict[str, int]:

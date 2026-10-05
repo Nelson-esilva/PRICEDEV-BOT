@@ -8,31 +8,35 @@ from app.core.db import as_utc, get_session_factory, utcnow
 from app.core.logging import get_logger
 from app.ingestion.pipeline import ingest_offers
 from app.monitoring.metrics import get_or_create_checkpoint
+from app.monitoring.quarantine import clear as clear_quarantine
+from app.monitoring.quarantine import trip as trip_quarantine
 from app.publishing.telegram import publish_opportunity
-from app.sources.pelando import PelandoSource
-from app.sources.shopee import ShopeeSource
 from app.sources.base import SourceAuthError, SourceBlocked, SourceConnector, SourceError
+from app.sources.registry import build_connectors
 
 log = get_logger("scheduler")
-
-
-def build_connectors(settings: Settings) -> list[SourceConnector]:
-    return [
-        PelandoSource(settings),
-        ShopeeSource(settings),
-    ]
 
 
 async def poll_source(connector: SourceConnector, settings: Settings) -> None:
     factory = get_session_factory()
     async with factory() as session:
         checkpoint = await get_or_create_checkpoint(session, connector.name)
+        if connector.is_enabled() and not checkpoint.enabled:
+            checkpoint.enabled = True
+            await session.commit()
         now = utcnow()
         circuit_until = as_utc(checkpoint.circuit_open_until)
         locked_until = as_utc(checkpoint.locked_until)
         if circuit_until and circuit_until > now:
-            log.warning("circuit_open", source=connector.name, until=str(circuit_until))
-            return
+            remaining = (circuit_until - now).total_seconds()
+            if remaining > 20 * 60:
+                checkpoint.circuit_open_until = None
+                checkpoint.enabled = True
+                clear_quarantine(checkpoint)
+                await session.commit()
+            else:
+                log.warning("circuit_open", source=connector.name, until=str(circuit_until))
+                return
         if locked_until and locked_until > now:
             return
         checkpoint.locked_until = now + timedelta(seconds=max(connector.poll_seconds - 1, 3))
@@ -53,6 +57,7 @@ async def poll_source(connector: SourceConnector, settings: Settings) -> None:
             checkpoint.offers_rejected += result.rejected
             checkpoint.last_success_at = utcnow()
             checkpoint.last_error = None
+            clear_quarantine(checkpoint)
             log.info(
                 "poll_ok",
                 source=connector.name,
@@ -61,20 +66,39 @@ async def poll_source(connector: SourceConnector, settings: Settings) -> None:
                 duplicatas=result.duplicates,
             )
             if settings.enable_telegram_publish:
+                posted = 0
+                cap = max(0, settings.telegram_publish_per_poll)
                 for opp in result.opportunities:
-                    await publish_opportunity(session, opp, settings)
+                    if posted >= cap:
+                        break
+                    status = await publish_opportunity(session, opp, settings)
+                    if status == "published":
+                        posted += 1
             await session.commit()
     except SourceBlocked as exc:
-        await _fail(connector.name, str(exc), disable=True)
+        await _fail(connector.name, str(exc), disable=False, blocked=True)
     except SourceAuthError as exc:
-        await _fail(connector.name, str(exc), disable=True)
+        await _fail(connector.name, str(exc), disable=True, blocked=True)
     except SourceError as exc:
-        await _fail(connector.name, str(exc), disable=exc.disable, rate_limit="429" in str(exc))
+        await _fail(
+            connector.name,
+            str(exc),
+            disable=exc.disable,
+            rate_limit="429" in str(exc),
+            blocked="403" in str(exc) or "429" in str(exc),
+        )
     except Exception as exc:
         await _fail(connector.name, str(exc), disable=False)
 
 
-async def _fail(source: str, message: str, *, disable: bool, rate_limit: bool = False) -> None:
+async def _fail(
+    source: str,
+    message: str,
+    *,
+    disable: bool,
+    rate_limit: bool = False,
+    blocked: bool = False,
+) -> None:
     log.error("source_failed", source=source, error=message, disable=disable)
     factory = get_session_factory()
     async with factory() as session:
@@ -85,7 +109,8 @@ async def _fail(source: str, message: str, *, disable: bool, rate_limit: bool = 
             checkpoint.rate_limit_events += 1
         if disable:
             checkpoint.enabled = False
-            checkpoint.circuit_open_until = utcnow() + timedelta(minutes=30)
+        if blocked or rate_limit:
+            trip_quarantine(checkpoint, reason=message, blocked=blocked)
         await session.commit()
 
 

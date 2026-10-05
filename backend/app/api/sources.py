@@ -5,11 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_session
-from app.models.entities import SourceCheckpoint
 from app.monitoring.metrics import get_or_create_checkpoint, latency_summary
 from app.schemas.api import SourceStatusOut
-from app.sources.pelando import PelandoSource
-from app.sources.shopee import ShopeeSource
+from app.sources.registry import build_connectors
 
 router = APIRouter()
 
@@ -31,10 +29,7 @@ async def monitoring_status(
 
 
 async def _statuses(session: AsyncSession, settings: Settings) -> list[SourceStatusOut]:
-    connectors = [
-        PelandoSource(settings),
-        ShopeeSource(settings),
-    ]
+    connectors = build_connectors(settings)
     out: list[SourceStatusOut] = []
     for connector in connectors:
         checkpoint = await get_or_create_checkpoint(session, connector.name)

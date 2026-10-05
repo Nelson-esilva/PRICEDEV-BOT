@@ -15,10 +15,24 @@ from app.affiliates.resolver import resolve_links
 from app.history.stats import compute_history_stats
 from app.ingestion.identity import identity_from_offer
 from app.models.entities import Opportunity, PriceObservation, Product, SourceMetricSample
+from app.pricing.crowd import crowd_signals
 from app.pricing.engine import evaluate_offer
+from app.pricing.outlier import (
+    MAX_HELD_READS,
+    REQUIRED_CONFIRMATIONS,
+    ReadVerdict,
+    classify_read,
+    reads_agree,
+)
 from app.schemas.normalized import Classification, NormalizedOffer
 
 log = get_logger("ingestion")
+
+
+class OutlierRejected(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class IngestionResult:
@@ -34,6 +48,22 @@ class IngestionResult:
 
 def _bucket(moment: datetime) -> str:
     return moment.replace(microsecond=0).isoformat()
+
+
+def _hub_reason_tags(offer: NormalizedOffer) -> list[str]:
+    if offer.source != "mlhub":
+        return []
+    signals = offer.community_signals or {}
+    tags: list[str] = []
+    if signals.get("hub_extra"):
+        tags.append("hub_extra")
+    if signals.get("hub_best"):
+        tags.append("hub_best")
+    for name in signals.get("hub_categories") or []:
+        label = str(name).strip()
+        if label:
+            tags.append(f"hub_cat:{label}")
+    return tags
 
 
 def _display_fields(offer: NormalizedOffer) -> dict:
@@ -52,6 +82,7 @@ def _display_fields(offer: NormalizedOffer) -> dict:
 async def _refresh_display(
     session: AsyncSession,
     offer: NormalizedOffer,
+    settings: Settings,
     *,
     marketplace: str,
     native_id: str,
@@ -98,6 +129,33 @@ async def _refresh_display(
             setattr(opportunity, key, value)
     if offer.product_name:
         opportunity.product_name = offer.product_name
+    opportunity.current_price = offer.effective_price
+    opportunity.fetched_at = offer.fetched_at or at
+    opportunity.ingested_at = at
+    if offer.purchase_url:
+        links = await resolve_links(
+            original_url=offer.purchase_url,
+            existing_affiliate=offer.affiliate_url,
+            settings=settings,
+        )
+        opportunity.original_purchase_url = links.original
+        opportunity.validated_purchase_url = links.validated
+        opportunity.affiliate_url = links.affiliate
+        opportunity.final_purchase_url = links.final
+        opportunity.affiliate_network = links.network
+        opportunity.affiliate_status = links.status
+    if offer.merchant_name:
+        opportunity.merchant = offer.merchant_name
+    if offer.source == "mlhub":
+        if offer.category:
+            opportunity.category = offer.category
+        tags = _hub_reason_tags(offer)
+        if tags:
+            reasons = list(opportunity.reasons or [])
+            for tag in tags:
+                if tag not in reasons:
+                    reasons.append(tag)
+            opportunity.reasons = reasons
 
 
 def _effective(offer: NormalizedOffer) -> Decimal:
@@ -127,6 +185,9 @@ async def ingest_offers(
         result.received += 1
         try:
             opportunity = await _ingest_one(session, offer, settings, stamp)
+        except OutlierRejected:
+            result.rejected += 1
+            continue
         except Exception:
             log.exception("ingest_failed", source=offer.source, record=offer.source_record_id)
             result.rejected += 1
@@ -181,6 +242,7 @@ async def _ingest_one(
         await _refresh_display(
             session,
             offer,
+            settings,
             marketplace=marketplace,
             native_id=native_id,
             variant_id=variant_id,
@@ -208,6 +270,7 @@ async def _ingest_one(
             await _refresh_display(
                 session,
                 offer,
+                settings,
                 marketplace=marketplace,
                 native_id=native_id,
                 variant_id=variant_id,
@@ -249,6 +312,55 @@ async def _ingest_one(
         product.merchant_name = offer.merchant_name or product.merchant_name
         product.category = offer.category or product.category
         product.condition = offer.condition or product.condition
+
+    stats_before = await compute_history_stats(
+        session,
+        product_id=product.id,
+        exclude_observation_id=None,
+        window_days=settings.history_window_days,
+        now=now,
+        currency=offer.currency,
+        condition=offer.condition,
+    )
+    allow_zero = bool(offer.coupon_code) or (offer.category or "") in {"games", "gratis", "free"}
+    decision = classify_read(effective, list(stats_before.sample_prices), allow_zero=allow_zero)
+    if decision.verdict is ReadVerdict.REJECT:
+        log.warning(
+            "outlier_reject",
+            source=offer.source,
+            native=native_id,
+            price=str(effective),
+            reason=decision.reason,
+        )
+        await _touch_opportunity_risk(session, product, offer, decision.reason)
+        raise OutlierRejected(decision.reason)
+    if decision.verdict is ReadVerdict.CONFIRM:
+        held = product.held_price
+        if held is not None and reads_agree(held, effective):
+            product.held_count = (product.held_count or 0) + 1
+        else:
+            product.held_price = effective
+            product.held_count = (product.held_count or 0) + 1
+        if product.held_count < REQUIRED_CONFIRMATIONS and product.held_count < MAX_HELD_READS:
+            log.info(
+                "outlier_hold",
+                source=offer.source,
+                native=native_id,
+                price=str(effective),
+                held=product.held_count,
+            )
+            await _touch_opportunity_risk(
+                session,
+                product,
+                offer,
+                f"{decision.reason} ({product.held_count}/{REQUIRED_CONFIRMATIONS})",
+            )
+            return None
+        product.held_price = None
+        product.held_count = 0
+    else:
+        product.held_price = None
+        product.held_count = 0
 
     observation = PriceObservation(
         product_id=product.id,
@@ -299,6 +411,10 @@ async def _ingest_one(
         condition=offer.condition,
     )
     engine = evaluate_offer(offer, stats, settings, now=now)
+    extra_reasons, extra_risks = crowd_signals(offer, now=now)
+    extra_reasons.extend(_hub_reason_tags(offer))
+    engine.reasons.extend(extra_reasons)
+    engine.risks.extend(extra_risks)
     links = await resolve_links(
         original_url=offer.purchase_url,
         existing_affiliate=offer.affiliate_url,
@@ -358,7 +474,10 @@ async def _ingest_one(
         )
         session.add(opportunity)
     else:
+        keep_hub = opportunity.source == "mlhub" and offer.source != "mlhub"
         for key, value in payload.items():
+            if keep_hub and key in {"source", "category"}:
+                continue
             setattr(opportunity, key, value)
     await session.flush()
 
@@ -379,3 +498,25 @@ async def _ingest_one(
         )
     )
     return opportunity
+
+
+async def _touch_opportunity_risk(
+    session: AsyncSession,
+    product: Product,
+    offer: NormalizedOffer,
+    reason: str,
+) -> None:
+    opportunity = (
+        await session.execute(select(Opportunity).where(Opportunity.product_id == product.id))
+    ).scalar_one_or_none()
+    if opportunity is None:
+        return
+    risks = list(opportunity.risks or [])
+    if reason not in risks:
+        risks.append(reason)
+        opportunity.risks = risks
+    if offer.product_name:
+        opportunity.product_name = offer.product_name
+    for key, value in _display_fields(offer).items():
+        if value is not None:
+            setattr(opportunity, key, value)
