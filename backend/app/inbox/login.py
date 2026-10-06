@@ -15,10 +15,9 @@ from app.core.config import get_settings
 
 
 def extra_session_dir() -> Path:
-    root = Path.cwd() / "data" / "sessions"
-    parent = Path.cwd().parent / "data" / "sessions"
-    if parent.exists() and not root.exists():
-        return parent
+    from app.core.config import runtime_data_dir
+
+    root = runtime_data_dir() / "sessions"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

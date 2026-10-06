@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .env.local
 *.pyc
 __pycache__/
@@ -19,7 +21,12 @@ frontend/dist/
 .idea/
 .vscode/
 data/
+secrets/
 references/github/
 *.session
 *.session-journal
 telegram_inbox.session
+backend/telegram_inbox.session
+*.cookie
+*.sqlite
+pricedev.db

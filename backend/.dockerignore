@@ -1,0 +1,15 @@
+.venv
+__pycache__
+*.pyc
+*.egg-info
+.pytest_cache
+.ruff_cache
+*.session
+*.session-journal
+*.db
+*.db-journal
+.env
+.env.*
+data
+secrets
+tests

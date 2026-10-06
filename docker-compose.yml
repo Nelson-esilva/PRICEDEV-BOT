@@ -3,10 +3,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: pricedev
-      POSTGRES_PASSWORD: pricedev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pricedev}
       POSTGRES_DB: pricedev
-    ports:
-      - "5432:5432"
     volumes:
       - pricedev_pg:/var/lib/postgresql/data
     healthcheck:
@@ -21,13 +19,17 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://pricedev:pricedev@postgres:5432/pricedev
+      DATABASE_URL: postgresql+asyncpg://pricedev:${POSTGRES_PASSWORD:-pricedev}@postgres:5432/pricedev
       ENABLE_SCHEDULER: "true"
+      TELEGRAM_SESSION_PATH: /var/lib/pricedev/telegram_inbox.session
+      PRICEDEV_DATA_DIR: /var/lib/pricedev/data
+    volumes:
+      - pricedev_runtime:/var/lib/pricedev
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
 
   frontend:
     build:
@@ -39,3 +41,4 @@ services:
 
 volumes:
   pricedev_pg:
+  pricedev_runtime:

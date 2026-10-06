@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _env_files() -> tuple[str, ...]:
+    files = [".env", "../.env"]
+    extra = os.environ.get("PRICEDEV_SECRETS_FILE", "").strip()
+    if extra:
+        files.append(extra)
+    return tuple(files)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"),
+        env_file=_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -15,6 +25,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "sqlite+aiosqlite:///./pricedev.db"
     log_level: str = "INFO"
+    pricedev_data_dir: str = "./data"
+    pricedev_secrets_file: str = ""
 
     enable_scheduler: bool = True
     slo_seconds: int = 180
@@ -122,6 +134,15 @@ class Settings(BaseSettings):
             "freshness": self.score_weight_freshness,
             "community": self.score_weight_community,
         }
+
+
+def runtime_data_dir(settings: Settings | None = None) -> Path:
+    settings = settings or get_settings()
+    path = Path(settings.pricedev_data_dir)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @lru_cache

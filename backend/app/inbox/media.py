@@ -14,7 +14,9 @@ _ASIN = re.compile(r"^[A-Z0-9]{10}$")
 
 
 def media_dir() -> Path:
-    root = Path.cwd() / "data" / "inbox_media"
+    from app.core.config import runtime_data_dir
+
+    root = runtime_data_dir() / "inbox_media"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
