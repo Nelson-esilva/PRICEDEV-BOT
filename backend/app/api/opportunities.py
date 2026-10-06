@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,29 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from app.core.db import get_session
+from app.core.search import any_contains, category_match, reason_match, store_match
 from app.models.entities import Opportunity
 from app.schemas.api import OpportunityListOut, OpportunityOut
 
 router = APIRouter()
-
-
-def _mix_by_source(rows: list[Opportunity], limit: int) -> list[Opportunity]:
-    buckets: dict[str, list[Opportunity]] = defaultdict(list)
-    for row in rows:
-        buckets[row.source].append(row)
-    mixed: list[Opportunity] = []
-    while buckets and len(mixed) < limit:
-        empty: list[str] = []
-        for source, items in buckets.items():
-            if not items:
-                empty.append(source)
-                continue
-            mixed.append(items.pop(0))
-            if len(mixed) >= limit:
-                break
-        for source in empty:
-            buckets.pop(source, None)
-    return mixed
 
 
 @router.get("/opportunities", response_model=OpportunityListOut)
@@ -49,7 +30,10 @@ async def list_opportunities(
     min_price: float | None = Query(default=None),
     status: str = "active",
     since: datetime | None = None,
-        limit: int = Query(default=50, ge=1, le=400),
+    q: str | None = None,
+    store: str | None = None,
+    reason: str | None = None,
+    limit: int = Query(default=50, ge=1, le=400),
     offset: int = Query(default=0, ge=0),
 ) -> OpportunityListOut:
     stmt: Select = select(Opportunity)
@@ -63,9 +47,41 @@ async def list_opportunities(
     if merchant:
         stmt = stmt.where(Opportunity.merchant.ilike(f"%{merchant}%"))
         count_stmt = count_stmt.where(Opportunity.merchant.ilike(f"%{merchant}%"))
-    if category:
-        stmt = stmt.where(Opportunity.category == category)
-        count_stmt = count_stmt.where(Opportunity.category == category)
+    searched = any_contains(
+        [
+            Opportunity.product_name,
+            Opportunity.merchant,
+            Opportunity.category,
+            Opportunity.description,
+            Opportunity.original_purchase_url,
+        ],
+        q,
+    )
+    if searched is not None:
+        stmt = stmt.where(searched)
+        count_stmt = count_stmt.where(searched)
+    store_clause = store_match(
+        store,
+        merchant=Opportunity.merchant,
+        source=Opportunity.source,
+        urls=[Opportunity.original_purchase_url, Opportunity.final_purchase_url],
+    )
+    if store_clause is not None:
+        stmt = stmt.where(store_clause)
+        count_stmt = count_stmt.where(store_clause)
+    cat_clause = category_match(
+        Opportunity.product_name,
+        category=category,
+        category_col=Opportunity.category,
+        reasons_col=Opportunity.reasons,
+    )
+    if cat_clause is not None:
+        stmt = stmt.where(cat_clause)
+        count_stmt = count_stmt.where(cat_clause)
+    tagged = reason_match(Opportunity.reasons, reason)
+    if tagged is not None:
+        stmt = stmt.where(tagged)
+        count_stmt = count_stmt.where(tagged)
     if classification:
         stmt = stmt.where(Opportunity.classification == classification)
         count_stmt = count_stmt.where(Opportunity.classification == classification)
@@ -95,27 +111,9 @@ async def list_opportunities(
         Opportunity.detected_at.desc(),
         Opportunity.source_created_at.desc(),
     )
-    if source or offset:
-        rows = list(
-            (await session.execute(stmt.order_by(*order).offset(offset).limit(limit))).scalars()
-        )
-    else:
-        sources = list(
-            (await session.execute(stmt.with_only_columns(Opportunity.source).distinct().order_by(None))).scalars()
-        )
-        per = max(12, (limit + max(len(sources), 1) - 1) // max(len(sources), 1))
-        pool: list[Opportunity] = []
-        for name in sources:
-            chunk = list(
-                (
-                    await session.execute(
-                        stmt.where(Opportunity.source == name).order_by(*order).limit(per)
-                    )
-                ).scalars()
-            )
-            pool.extend(chunk)
-        rows = _mix_by_source(pool, limit)
-        rows.sort(key=lambda row: row.source_created_at or row.detected_at, reverse=True)
+    rows = list(
+        (await session.execute(stmt.order_by(*order).offset(offset).limit(limit))).scalars()
+    )
     from app.core.config import get_settings
 
     settings = get_settings()

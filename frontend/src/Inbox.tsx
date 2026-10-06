@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchInbox, type InboxItem } from "./api";
+import Pager from "./Pager";
 
 const STORES = [
   { id: "mercadolivre", label: "Mercado Livre", letter: "M" },
@@ -44,11 +45,7 @@ function money(value: number | null | undefined) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function mergeInbox(prev: InboxItem[], incoming: InboxItem[]) {
-  const byId = new Map(prev.map((item) => [item.id, item]));
-  for (const item of incoming) byId.set(item.id, item);
-  return [...byId.values()].sort((left, right) => postedMs(right.posted_at) - postedMs(left.posted_at)).slice(0, 200);
-}
+const PAGE_SIZE = 48;
 
 function categoryOf(item: InboxItem) {
   const name = item.product.toLowerCase();
@@ -61,21 +58,32 @@ export default function Inbox() {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [group, setGroup] = useState("");
   const [store, setStore] = useState("");
   const [source, setSource] = useState("");
   const [category, setCategory] = useState("");
   const [sort, setSort] = useState<"recent" | "price">("recent");
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [broken, setBroken] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, store, source, category]);
 
   useEffect(() => {
     let alive = true;
     async function load() {
       try {
-        const data = await fetchInbox();
+        const data = await fetchInbox({
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+          q: query,
+          marketplace: store,
+          chat: source,
+          category,
+        });
         if (!alive) return;
-        setItems((prev) => mergeInbox(prev, data.items));
+        setItems(data.items);
         setTotal(data.total);
         setListening(data.listening);
         setError(null);
@@ -90,7 +98,9 @@ export default function Inbox() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [page, query, store, source, category]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const groups = useMemo(() => {
     const names = new Set(items.map((item) => item.chat_title).filter(Boolean));
@@ -103,19 +113,9 @@ export default function Inbox() {
   }, [items]);
 
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const groupNeedle = group.trim().toLowerCase();
-    const filtered = items.filter((item) => {
-      if (store && item.marketplace !== store) return false;
-      if (source && item.chat_title !== source) return false;
-      if (category && categoryOf(item) !== category) return false;
-      if (needle && !`${item.product} ${item.marketplace}`.toLowerCase().includes(needle)) return false;
-      if (groupNeedle && !(item.chat_title || "").toLowerCase().includes(groupNeedle)) return false;
-      return true;
-    });
-    if (sort === "recent") return filtered;
-    return [...filtered].sort((left, right) => (left.price ?? 1e12) - (right.price ?? 1e12));
-  }, [items, query, group, store, source, category, sort]);
+    if (sort === "recent") return items;
+    return [...items].sort((left, right) => (left.price ?? 1e12) - (right.price ?? 1e12));
+  }, [items, sort]);
 
   function countByGroup(name: string) {
     return items.filter((item) => item.chat_title === name).length;
@@ -136,7 +136,6 @@ export default function Inbox() {
 
   function clearFilters() {
     setQuery("");
-    setGroup("");
     setStore("");
     setSource("");
     setCategory("");
@@ -179,17 +178,6 @@ export default function Inbox() {
           />
           <kbd>⌘K</kbd>
         </label>
-        <label className="link-box">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
-          </svg>
-          <input
-            value={group}
-            onChange={(event) => setGroup(event.target.value)}
-            placeholder="Filtrar por grupo"
-            aria-label="Filtrar por grupo"
-          />
-        </label>
         <button className="compare" type="button" onClick={clearFilters}>
           Limpar <span>→</span>
         </button>
@@ -219,7 +207,7 @@ export default function Inbox() {
           <p className="side-title">Fontes</p>
           <button className={source === "" ? "side-item on" : "side-item"} type="button" onClick={() => setSource("")}>
             <span>Todos os grupos</span>
-            <b>{items.length}</b>
+            <b>{total}</b>
           </button>
           {groups.map((name) => (
             <button key={name} className={source === name ? "side-item on" : "side-item"} type="button" onClick={() => setSource(name)}>
@@ -245,7 +233,7 @@ export default function Inbox() {
         <section className="results">
           <div className="results-head">
             <h2>
-              {visible.length} oferta{visible.length === 1 ? "" : "s"} encontrada{visible.length === 1 ? "" : "s"}
+              {total} post{total === 1 ? "" : "s"} no banco
             </h2>
             <label className="sort">
               Ordenar por
@@ -256,7 +244,7 @@ export default function Inbox() {
             </label>
           </div>
 
-          {items.length === 0 ? (
+          {items.length === 0 && !(query.trim() || store || source || category) ? (
             <div className="empty">
               <h2>{listening ? "Esperando o próximo post…" : "Escuta desligada"}</h2>
               <p>
@@ -351,6 +339,7 @@ export default function Inbox() {
               })}
             </div>
           )}
+          <Pager page={page} pageCount={pageCount} total={total} pageSize={PAGE_SIZE} onPage={setPage} />
         </section>
       </div>
     </>

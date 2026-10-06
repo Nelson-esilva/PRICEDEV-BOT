@@ -14,8 +14,9 @@ from app.api.sources import router as sources_router
 from app.api.watchlist import router as watchlist_router
 from app.core.config import get_settings
 from app.core.db import init_db
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger
 from app.inbox import run_telegram_inbox
+from app.monitoring.retention import run_retention
 from app.monitoring.scheduler import run_scheduler
 
 
@@ -24,6 +25,10 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
     await init_db()
+    try:
+        await run_retention(settings)
+    except Exception as exc:
+        get_logger("app").exception("retention_startup_failed", error=str(exc))
     tasks: list[asyncio.Task] = []
     if settings.enable_scheduler:
         tasks.append(asyncio.create_task(run_scheduler(settings)))

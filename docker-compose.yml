@@ -1,5 +1,8 @@
+name: pricedev
+
 services:
   postgres:
+    container_name: pricedev-postgres
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: pricedev
@@ -14,6 +17,7 @@ services:
       retries: 10
 
   backend:
+    container_name: pricedev-backend
     build:
       context: ./backend
     env_file:
@@ -32,10 +36,11 @@ services:
       - "8000"
 
   frontend:
+    container_name: pricedev-frontend
     build:
       context: ./frontend
     ports:
-      - "5173:80"
+      - "${PRICEDEV_UI_PORT:-5173}:80"
     depends_on:
       - backend
 

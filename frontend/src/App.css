@@ -294,6 +294,41 @@ button { cursor: pointer; }
   padding: 0 10px;
 }
 
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pager-nums {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.pager-nums button {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+.pager-nums button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pager-nums button.on {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #fff;
+}
 .results-head {
   display: flex;
   align-items: center;

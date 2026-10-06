@@ -3,10 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_utc, get_session
+from app.core.search import any_contains, category_match, contains
 from app.inbox.media import catalog_image, media_path, ml_thumbnail
 from app.inbox.parse import parse_deal
 from app.models.entities import InboxMessage
@@ -69,24 +70,78 @@ def _out(row: InboxMessage, settings) -> InboxItemOut:
     )
 
 
+def _blocked_inbox(settings):
+    tokens = settings.telegram_inbox_block_chat_list
+    if not tokens:
+        return None
+    parts = []
+    for raw in tokens:
+        token = raw.strip().lstrip("@")
+        if not token:
+            continue
+        digits = token.lstrip("-")
+        parts.append(InboxMessage.chat_id == token)
+        parts.append(InboxMessage.chat_id == digits)
+        if digits.isdigit():
+            parts.append(InboxMessage.chat_id == f"-{digits}")
+            parts.append(InboxMessage.chat_id == f"-100{digits}")
+        parts.append(func.lower(InboxMessage.chat_title) == token.lower())
+    return or_(*parts) if parts else None
+
+
 @router.get("/inbox", response_model=InboxListOut)
 async def list_inbox(
     session: AsyncSession = Depends(get_session),
-    limit: int = Query(default=80, ge=1, le=300),
+    limit: int = Query(default=48, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    q: str | None = None,
+    marketplace: str | None = None,
+    chat: str | None = None,
+    category: str | None = None,
 ) -> InboxListOut:
     from app.core.config import get_settings
 
     settings = get_settings()
-    total = (await session.execute(select(func.count()).select_from(InboxMessage))).scalar_one()
+    stmt = select(InboxMessage)
+    count_stmt = select(func.count()).select_from(InboxMessage)
+    blocked = _blocked_inbox(settings)
+    if blocked is not None:
+        stmt = stmt.where(not_(blocked))
+        count_stmt = count_stmt.where(not_(blocked))
+    searched = any_contains(
+        [
+            InboxMessage.product_name,
+            InboxMessage.body,
+            InboxMessage.chat_title,
+            InboxMessage.marketplace,
+            InboxMessage.purchase_url,
+        ],
+        q,
+    )
+    if searched is not None:
+        stmt = stmt.where(searched)
+        count_stmt = count_stmt.where(searched)
+    if marketplace:
+        stmt = stmt.where(InboxMessage.marketplace == marketplace)
+        count_stmt = count_stmt.where(InboxMessage.marketplace == marketplace)
+    chat_clause = contains(InboxMessage.chat_title, chat)
+    if chat_clause is not None:
+        stmt = stmt.where(chat_clause)
+        count_stmt = count_stmt.where(chat_clause)
+    cat_clause = category_match(InboxMessage.product_name, category=category)
+    if cat_clause is not None:
+        stmt = stmt.where(cat_clause)
+        count_stmt = count_stmt.where(cat_clause)
+    total = (await session.execute(count_stmt)).scalar_one()
     rows = list(
         (
             await session.execute(
-                select(InboxMessage).order_by(InboxMessage.posted_at.desc(), InboxMessage.received_at.desc())
+                stmt.order_by(InboxMessage.posted_at.desc(), InboxMessage.received_at.desc())
+                .offset(offset)
+                .limit(limit)
             )
         ).scalars()
     )
-    rows.sort(key=lambda row: (as_utc(row.posted_at), as_utc(row.received_at)), reverse=True)
-    rows = rows[:limit]
     await _hydrate_social(session, rows, settings)
     await _hydrate_images(session, rows)
     await _hydrate_affiliates(session, rows, settings)

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { addWatch, fetchOpportunities, type Opportunity } from "./api";
 import Hub from "./Hub";
 import Inbox from "./Inbox";
+import Pager from "./Pager";
 
 const STORES = [
   { id: "amazon", label: "Amazon", letter: "A", test: /amazon/i },
@@ -90,20 +91,7 @@ function relative(iso: string | null) {
   return `há ${Math.round(hours / 24)} d`;
 }
 
-function stampMs(iso: string | null | undefined) {
-  if (!iso) return 0;
-  const raw = /Z$|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`;
-  const value = new Date(raw).getTime();
-  return Number.isFinite(value) ? value : 0;
-}
-
-function mergeFeed(prev: Opportunity[], incoming: Opportunity[]) {
-  const byId = new Map(prev.map((item) => [item.id, item]));
-  for (const item of incoming) byId.set(item.id, item);
-  return [...byId.values()]
-    .sort((left, right) => stampMs(right.source_created_at || right.observed_at) - stampMs(left.source_created_at || left.observed_at))
-    .slice(0, 400);
-}
+const PAGE_SIZE = 48;
 
 const VIA_LABEL: Record<string, string> = {
   ofertas: "Ofertas",
@@ -144,14 +132,26 @@ export default function App() {
   const [watchNote, setWatchNote] = useState<string | null>(null);
   const [moreStores, setMoreStores] = useState(false);
   const [area, setArea] = useState<"ofertas" | "canais" | "hub">("ofertas");
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [source, query, store, category]);
 
   useEffect(() => {
     let alive = true;
     async function load() {
       try {
-        const data = await fetchOpportunities();
+        const data = await fetchOpportunities({
+          source: source || undefined,
+          q: query,
+          store: store || undefined,
+          category: category || undefined,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        });
         if (!alive) return;
-        setItems((prev) => mergeFeed(prev, data.items.filter((item) => item.source !== "mock" && item.source !== "mlhub")));
+        setItems(data.items.filter((item) => item.source !== "mock" && item.source !== "mlhub"));
         setTotal(data.total);
         setError(null);
       } catch (err) {
@@ -165,7 +165,9 @@ export default function App() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [page, source, query, store, category]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const extraStores = useMemo(() => {
     const extra = new Map<string, string>();
@@ -190,25 +192,14 @@ export default function App() {
   }, [items]);
 
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const filtered = items.filter((item) => {
-      if (store && storeId(item) !== store) return false;
-      if (source && item.source !== source) return false;
-      if (category && categoryOf(item) !== category) return false;
-      if (needle) {
-        const hay = `${item.product} ${item.merchant ?? ""} ${item.source}`.toLowerCase();
-        if (!hay.includes(needle)) return false;
-      }
-      return true;
-    });
-    if (sort === "recent") return filtered;
-    const ranked = [...filtered];
+    if (sort === "recent") return items;
+    const ranked = [...items];
     ranked.sort((a, b) => {
       if (sort === "discount") return (discountOf(b) ?? -1) - (discountOf(a) ?? -1);
       return a.current_price - b.current_price;
     });
     return ranked;
-  }, [items, store, source, category, query, sort]);
+  }, [items, sort]);
 
   const freshCount = items.filter((item) => isFresh(item, 20)).length;
 
@@ -340,7 +331,7 @@ export default function App() {
           <p className="side-title">Fontes</p>
           <button className={source === "" ? "side-item on" : "side-item"} onClick={() => setSource("")}>
             <span>Todas as fontes</span>
-            <b>{items.length}</b>
+            <b>{total}</b>
           </button>
           {sourceTabs.map((id) => (
             <button key={id} className={source === id ? "side-item on" : "side-item"} onClick={() => setSource(id)}>
@@ -379,7 +370,7 @@ export default function App() {
 
           <div className="results-head">
             <h2>
-              {visible.length} oferta{visible.length === 1 ? "" : "s"} encontrada{visible.length === 1 ? "" : "s"}
+              {total} oferta{total === 1 ? "" : "s"} no banco
             </h2>
             <label className="sort">
               Ordenar por
@@ -391,7 +382,7 @@ export default function App() {
             </label>
           </div>
 
-          {items.length === 0 ? (
+          {items.length === 0 && !(query.trim() || store || source || category) ? (
             <div className="empty">
               <h2>Buscando ofertas…</h2>
               <p>O coletor está lendo as fontes agora. As primeiras peças entram em alguns segundos.</p>
@@ -471,6 +462,7 @@ export default function App() {
               })}
             </div>
           )}
+          <Pager page={page} pageCount={pageCount} total={total} pageSize={PAGE_SIZE} onPage={setPage} />
         </section>
       </div>
         </>

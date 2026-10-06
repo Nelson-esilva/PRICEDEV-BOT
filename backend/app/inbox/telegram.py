@@ -23,14 +23,36 @@ def _session_file(settings: Settings) -> str:
     return str(here)
 
 
-def _allowed_chat(settings: Settings, chat_id: int, username: str | None) -> bool:
+def _normalize_chat_token(value: str) -> str:
+    return value.strip().lstrip("@").lower()
+
+
+def _chat_tokens(chat_id: int, username: str | None, title: str | None) -> set[str]:
+    tokens = {str(chat_id), str(abs(chat_id))}
+    if username:
+        tokens.add(_normalize_chat_token(str(username)))
+    if title:
+        tokens.add(_normalize_chat_token(str(title)))
+    return {item for item in tokens if item}
+
+
+def _listed(wanted: list[str], chat_id: int, username: str | None, title: str | None) -> bool:
+    needles = {_normalize_chat_token(item) for item in wanted}
+    return bool(needles & _chat_tokens(chat_id, username, title))
+
+
+def _allowed_chat(
+    settings: Settings,
+    chat_id: int,
+    username: str | None,
+    title: str | None = None,
+) -> bool:
+    if _listed(settings.telegram_inbox_block_chat_list, chat_id, username, title):
+        return False
     wanted = settings.telegram_inbox_chat_list
     if not wanted:
         return True
-    tokens = {item.lstrip("@").lower() for item in wanted}
-    if str(chat_id) in tokens or str(abs(chat_id)) in tokens:
-        return True
-    return bool(username and username.lower() in tokens)
+    return _listed(wanted, chat_id, username, title)
 
 
 def _entity_urls(message) -> list[str]:
@@ -60,13 +82,13 @@ def _entity_urls(message) -> list[str]:
 async def _ingest(settings: Settings, message, chat, client=None, *, live: bool = False) -> bool:
     chat_id = getattr(chat, "id", None) or getattr(message, "chat_id", None)
     username = getattr(chat, "username", None)
-    if chat_id is None or not _allowed_chat(settings, int(chat_id), username):
+    title = getattr(chat, "title", None) or username or (str(chat_id) if chat_id is not None else None)
+    if chat_id is None or not _allowed_chat(settings, int(chat_id), username, title):
         return False
     text = getattr(message, "raw_text", None) or getattr(message, "message", None) or ""
     urls = extract_urls(text, _entity_urls(message))
     if not urls:
         return False
-    title = getattr(chat, "title", None) or username or str(chat_id)
     existing = await find_channel_post(channel="telegram", chat_id=str(chat_id), message_id=str(message.id))
     picture = None
     if client is not None and (existing is None or not existing[1]):
@@ -121,10 +143,13 @@ async def _backfill(client, settings: Settings) -> None:
     async for dialog in client.iter_dialogs():
         if not (dialog.is_group or dialog.is_channel):
             continue
+        entity = dialog.entity
+        username = getattr(entity, "username", None)
+        if not _allowed_chat(settings, int(dialog.id), username, dialog.name):
+            continue
         if chats >= 60:
             break
         chats += 1
-        entity = dialog.entity
         try:
             async for message in client.iter_messages(entity, limit=limit):
                 scanned += 1

@@ -28,7 +28,6 @@ log = get_logger("mlhub")
 HUB_URL = "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true"
 SEARCH_URL = "https://www.mercadolivre.com.br/affiliate-program/api/hub/search"
 SITE = "https://www.mercadolivre.com.br"
-HUB_MAX_ITEMS = 360
 _GANHOS_PCT = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
 _CTX_R = "_n.ctx.r="
 _NEXT_DATA = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
@@ -72,7 +71,7 @@ class MlHubSource(SourceConnector):
     def __init__(self, settings: Settings, *, client: httpx.AsyncClient | None = None) -> None:
         super().__init__(settings)
         self.poll_seconds = settings.ml_hub_poll_seconds
-        self.bucket = TokenBucket(0.4)
+        self.bucket = TokenBucket(0.6)
         self._client = client
         self._owns_client = client is None
 
@@ -109,6 +108,8 @@ class MlHubSource(SourceConnector):
         if not self.is_enabled():
             return []
         fetched_at = now or utcnow()
+        cap = max(50, self.settings.ml_hub_max_items)
+        pages = max(1, self.settings.ml_hub_pages_per_query)
         tagged: dict[str, dict[str, Any]] = {}
         first = await self._search(filters=[])
         if first is None:
@@ -120,26 +121,71 @@ class MlHubSource(SourceConnector):
             log.info("mlhub_poll", received=len(offers), via="html")
             return offers
         names = _category_names(first)
-        _absorb_cards(tagged, _polycards(first))
+        await self._fill(tagged, filters=[], cap=cap, pages=pages, start=first)
+        await self._fill(
+            tagged,
+            filters=[{"id": "extra_commission", "value": True}],
+            cap=cap,
+            pages=pages,
+            extra=True,
+        )
+        await self._fill(
+            tagged,
+            filters=[{"id": "best_seller", "value": True}],
+            cap=cap,
+            pages=pages,
+            best=True,
+        )
         for category in names:
-            if len(tagged) >= HUB_MAX_ITEMS:
+            if len(tagged) >= cap:
                 break
-            extra = await self._search(filters=[{"id": "category", "value": category}])
-            if extra:
-                _absorb_cards(tagged, _polycards(extra), category=names[category])
-        extra_set = await self._search(filters=[{"id": "extra_commission", "value": True}])
-        if extra_set:
-            _absorb_cards(tagged, _polycards(extra_set), extra=True)
-        best_set = await self._search(filters=[{"id": "best_seller", "value": True}])
-        if best_set:
-            _absorb_cards(tagged, _polycards(best_set), best=True)
+            await self._fill(
+                tagged,
+                filters=[{"id": "category", "value": category}],
+                cap=cap,
+                pages=1,
+                category=names[category],
+            )
         offers = self.offers_from_cards(
             [row["card"] for row in tagged.values()],
             fetched_at=fetched_at,
             tags=tagged,
-        )[:HUB_MAX_ITEMS]
-        log.info("mlhub_poll", received=len(offers), via="search", cards=len(tagged))
+        )[:cap]
+        log.info("mlhub_poll", received=len(offers), via="search", cards=len(tagged), cap=cap)
         return offers
+
+    async def _fill(
+        self,
+        tagged: dict[str, dict[str, Any]],
+        *,
+        filters: list[dict[str, Any]],
+        cap: int,
+        pages: int,
+        start: dict[str, Any] | None = None,
+        category: str | None = None,
+        extra: bool = False,
+        best: bool = False,
+    ) -> None:
+        offset = 0
+        used = 0
+        seed = start
+        while used < pages and len(tagged) < cap:
+            payload = seed if seed is not None else await self._search(filters=filters, offset=offset)
+            seed = None
+            if payload is None:
+                break
+            cards = _polycards(payload)
+            if not cards:
+                break
+            before = len(tagged)
+            _absorb_cards(tagged, cards, category=category, extra=extra, best=best)
+            used += 1
+            nxt = _next_offset(payload, offset)
+            if nxt is None or nxt <= offset:
+                break
+            if len(tagged) == before and used > 1:
+                break
+            offset = nxt
 
     def offers_from_html(self, html: str, *, fetched_at: datetime) -> list[NormalizedOffer]:
         cards = parse_mais_vendidos_cards(html) or parse_ofertas_cards(html)
@@ -432,6 +478,26 @@ def _polycards(payload: dict[str, Any]) -> list[dict[str, Any]]:
     model = payload.get("polycard_client_model") if isinstance(payload, dict) else {}
     rows = (model or {}).get("polycards") or []
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _next_offset(payload: dict[str, Any], offset: int) -> int | None:
+    cards = _polycards(payload)
+    if not cards:
+        return None
+    paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
+    limit = paging.get("limit") or paging.get("page_size")
+    total = paging.get("total")
+    current = paging.get("offset")
+    step = limit if isinstance(limit, int) and limit > 0 else len(cards)
+    base = current if isinstance(current, int) else offset
+    nxt = base + step
+    if isinstance(total, int) and nxt >= total:
+        return None
+    if isinstance(limit, int) and limit > 0 and len(cards) < limit:
+        return None
+    if nxt <= offset:
+        return None
+    return nxt
 
 
 def _card_id(card: dict[str, Any]) -> str:

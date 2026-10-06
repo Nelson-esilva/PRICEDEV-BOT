@@ -34,11 +34,36 @@ export type Opportunity = {
 
 const API = "";
 
+function withParams(opts: Record<string, string | number | undefined>) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(opts)) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) params.set(key, text);
+  }
+  return params;
+}
+
 export async function fetchOpportunities(
-  opts: { source?: string; limit?: number } = {},
+  opts: {
+    source?: string;
+    q?: string;
+    store?: string;
+    category?: string;
+    reason?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
 ): Promise<{ items: Opportunity[]; total: number }> {
-  const params = new URLSearchParams({ limit: String(opts.limit ?? 300) });
-  if (opts.source) params.set("source", opts.source);
+  const params = withParams({
+    limit: opts.limit ?? 48,
+    offset: opts.offset ?? 0,
+    source: opts.source,
+    q: opts.q,
+    store: opts.store,
+    category: opts.category,
+    reason: opts.reason,
+  });
   const response = await fetch(`${API}/api/v1/opportunities?${params.toString()}`);
   if (!response.ok) throw new Error("Falha ao carregar oportunidades");
   return response.json();
@@ -72,8 +97,25 @@ export type InboxItem = {
   received_at: string;
 };
 
-export async function fetchInbox(): Promise<{ items: InboxItem[]; total: number; listening: boolean }> {
-  const response = await fetch(`${API}/api/v1/inbox?limit=120`);
+export async function fetchInbox(
+  opts: {
+    limit?: number;
+    offset?: number;
+    q?: string;
+    marketplace?: string;
+    chat?: string;
+    category?: string;
+  } = {},
+): Promise<{ items: InboxItem[]; total: number; listening: boolean }> {
+  const params = withParams({
+    limit: opts.limit ?? 48,
+    offset: opts.offset ?? 0,
+    q: opts.q,
+    marketplace: opts.marketplace,
+    chat: opts.chat,
+    category: opts.category,
+  });
+  const response = await fetch(`${API}/api/v1/inbox?${params.toString()}`);
   if (!response.ok) throw new Error("Falha ao carregar os canais");
   return response.json();
 }

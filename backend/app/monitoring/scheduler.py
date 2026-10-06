@@ -10,6 +10,7 @@ from app.ingestion.pipeline import ingest_offers
 from app.monitoring.metrics import get_or_create_checkpoint
 from app.monitoring.quarantine import clear as clear_quarantine
 from app.monitoring.quarantine import trip as trip_quarantine
+from app.monitoring.retention import run_retention
 from app.publishing.telegram import publish_opportunity
 from app.sources.base import SourceAuthError, SourceBlocked, SourceConnector, SourceError
 from app.sources.registry import build_connectors
@@ -118,8 +119,16 @@ async def run_scheduler(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     connectors = [c for c in build_connectors(settings) if c.is_enabled()]
     log.info("scheduler_start", sources=[c.name for c in connectors])
+    last_retention = None
     try:
         while True:
+            now = utcnow()
+            if last_retention is None or (now - last_retention).total_seconds() >= 3600:
+                try:
+                    await run_retention(settings, now=now)
+                except Exception as exc:
+                    log.exception("retention_crash", error=str(exc))
+                last_retention = now
             for connector in connectors:
                 if not connector.is_enabled():
                     continue

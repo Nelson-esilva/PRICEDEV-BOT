@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from app.core.config import Settings
-from app.sources.mlhub import MlHubSource, extract_hub_items
+from app.sources.mlhub import MlHubSource, _next_offset, extract_hub_items
 
 
 def test_disabled_without_cookie():
@@ -71,3 +71,18 @@ def test_offers_from_search_polycards():
     offers = source.offers_from_cards(cards, fetched_at=datetime(2026, 10, 4, tzinfo=UTC))
     assert len(offers) == 1
     assert offers[0].native_product_id == "MLB4067001915"
+
+
+def test_next_offset_pages_until_total():
+    full = {
+        "paging": {"total": 200, "offset": 0, "limit": 48},
+        "polycard_client_model": {"polycards": [{}] * 48},
+    }
+    last = {
+        "paging": {"total": 200, "offset": 192, "limit": 48},
+        "polycard_client_model": {"polycards": [{}] * 8},
+    }
+    assert _next_offset(full, 0) == 48
+    assert _next_offset(last, 192) is None
+    assert _next_offset({"polycard_client_model": {"polycards": [{}] * 48}}, 0) == 48
+    assert _next_offset({"polycard_client_model": {"polycards": []}}, 0) is None

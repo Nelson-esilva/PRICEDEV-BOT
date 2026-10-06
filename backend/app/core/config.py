@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     ml_affiliate_cookie: str = ""
     amazon_affiliate_tag: str = ""
     ml_hub_poll_seconds: int = 120
+    ml_hub_max_items: int = 1200
+    ml_hub_pages_per_query: int = 8
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -82,6 +84,7 @@ class Settings(BaseSettings):
     telegram_api_hash: str = ""
     telegram_session_path: str = "./telegram_inbox.session"
     telegram_inbox_chats: str = ""
+    telegram_inbox_block_chats: str = ""
     telegram_inbox_backfill: int = 40
 
     min_historical_discount_pct: float = 20
@@ -89,6 +92,7 @@ class Settings(BaseSettings):
     anomaly_discount_pct: float = 50
 
     history_window_days: int = 90
+    promo_retention_days: int = 5
     min_history_observations: int = 10
     min_history_distinct_days: int = 14
 
@@ -115,6 +119,10 @@ class Settings(BaseSettings):
     @property
     def telegram_inbox_chat_list(self) -> list[str]:
         return [item.strip() for item in self.telegram_inbox_chats.split(",") if item.strip()]
+
+    @property
+    def telegram_inbox_block_chat_list(self) -> list[str]:
+        return [item.strip() for item in self.telegram_inbox_block_chats.split(",") if item.strip()]
 
     @property
     def kabum_keyword_list(self) -> list[str]:

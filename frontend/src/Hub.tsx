@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchOpportunities, type Opportunity } from "./api";
+import Pager from "./Pager";
 
 const HUB_CATEGORIES = [
   { id: "", label: "Tudo" },
@@ -52,13 +53,7 @@ function relative(iso: string | null) {
   return `há ${Math.round(hours / 24)} d`;
 }
 
-function mergeHub(prev: Opportunity[], incoming: Opportunity[]) {
-  const byId = new Map(prev.map((item) => [item.id, item]));
-  for (const item of incoming) byId.set(item.id, item);
-  return [...byId.values()]
-    .sort((left, right) => stampMs(right.source_created_at || right.observed_at) - stampMs(left.source_created_at || left.observed_at))
-    .slice(0, 400);
-}
+const PAGE_SIZE = 48;
 
 function reasonsOf(item: Opportunity) {
   return item.reasons ?? [];
@@ -71,10 +66,6 @@ function categoriesOf(item: Opportunity) {
   if (named.length) return named;
   if (item.category && item.category !== "hub") return [item.category];
   return [];
-}
-
-function isExtra(item: Opportunity) {
-  return reasonsOf(item).includes("hub_extra") || /extras/i.test(item.payment_hint || "") || /extras/i.test(item.description || "");
 }
 
 function isBest(item: Opportunity) {
@@ -99,20 +90,31 @@ export default function Hub() {
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [hint, setHint] = useState("");
   const [store, setStore] = useState("");
   const [source, setSource] = useState("");
   const [category, setCategory] = useState("");
   const [sort, setSort] = useState<"recent" | "discount" | "price">("recent");
   const [saved, setSaved] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, store, source, category]);
 
   useEffect(() => {
     let alive = true;
     async function load() {
       try {
-        const data = await fetchOpportunities({ source: "mlhub", limit: 400 });
+        const data = await fetchOpportunities({
+          source: "mlhub",
+          q: query,
+          category,
+          reason: source === "best" ? "hub_best" : undefined,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        });
         if (!alive) return;
-        setItems((prev) => mergeHub(prev, data.items));
+        setItems(data.items);
         setTotal(data.total);
         setError(null);
       } catch (err) {
@@ -126,20 +128,12 @@ export default function Hub() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [page, query, store, source, category]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const hintNeedle = hint.trim().toLowerCase();
-    const filtered = items.filter((item) => {
-      if (store && store !== "mercadolivre") return false;
-      if (source === "extra" && !isExtra(item)) return false;
-      if (source === "best" && !isBest(item)) return false;
-      if (category && !categoriesOf(item).includes(category)) return false;
-      if (needle && !`${item.product} ${categoriesOf(item).join(" ")}`.toLowerCase().includes(needle)) return false;
-      if (hintNeedle && !`${item.description ?? ""} ${item.payment_hint ?? ""}`.toLowerCase().includes(hintNeedle)) return false;
-      return true;
-    });
+    const filtered = store && store !== "mercadolivre" ? [] : items;
     if (sort === "recent") return filtered;
     const ranked = [...filtered];
     ranked.sort((left, right) => {
@@ -147,12 +141,11 @@ export default function Hub() {
       return left.current_price - right.current_price;
     });
     return ranked;
-  }, [items, query, hint, store, source, category, sort]);
+  }, [items, store, sort]);
 
   const freshCount = items.filter((item) => isFresh(item, 20)).length;
 
   function countBySource(id: string) {
-    if (id === "extra") return items.filter(isExtra).length;
     if (id === "best") return items.filter(isBest).length;
     return items.length;
   }
@@ -172,7 +165,6 @@ export default function Hub() {
 
   function clearFilters() {
     setQuery("");
-    setHint("");
     setStore("");
     setSource("");
     setCategory("");
@@ -215,17 +207,6 @@ export default function Hub() {
           />
           <kbd>⌘K</kbd>
         </label>
-        <label className="link-box">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 1v22M5 8h14M5 16h14" />
-          </svg>
-          <input
-            value={hint}
-            onChange={(event) => setHint(event.target.value)}
-            placeholder="Filtrar por ganhos"
-            aria-label="Filtrar por ganhos"
-          />
-        </label>
         <button className="compare" type="button" onClick={clearFilters}>
           Limpar <span>→</span>
         </button>
@@ -252,11 +233,7 @@ export default function Hub() {
           <p className="side-title">Fontes</p>
           <button className={source === "" ? "side-item on" : "side-item"} type="button" onClick={() => setSource("")}>
             <span>Todas as fontes</span>
-            <b>{items.length}</b>
-          </button>
-          <button className={source === "extra" ? "side-item on" : "side-item"} type="button" onClick={() => setSource("extra")}>
-            <span>Ganhos extras</span>
-            <b>{countBySource("extra")}</b>
+            <b>{total}</b>
           </button>
           <button className={source === "best" ? "side-item on" : "side-item"} type="button" onClick={() => setSource("best")}>
             <span>Mais vendidos</span>
@@ -280,7 +257,7 @@ export default function Hub() {
         <section className="results">
           <div className="results-head">
             <h2>
-              {visible.length} oferta{visible.length === 1 ? "" : "s"} encontrada{visible.length === 1 ? "" : "s"}
+              {total} oferta{total === 1 ? "" : "s"} no banco
             </h2>
             <label className="sort">
               Ordenar por
@@ -292,7 +269,7 @@ export default function Hub() {
             </label>
           </div>
 
-          {items.length === 0 ? (
+          {items.length === 0 && !(query.trim() || source || category || (store && store !== "mercadolivre")) ? (
             <div className="empty">
               <h2>Buscando destaques…</h2>
               <p>O coletor está lendo o hub agora. As primeiras peças entram no próximo ciclo.</p>
@@ -331,11 +308,10 @@ export default function Hub() {
                         {item.price_verified ? <span className="ok">Verificada</span> : null}
                       </div>
                       <h3>{item.product}</h3>
-                      <p className="via">{[categoriesOf(item)[0], item.description || "Hub · Destaque"].filter(Boolean).join(" · ")}</p>
+                      <p className="via">{categoriesOf(item)[0] || "Hub · Destaque"}</p>
                       <p className="price">
                         {item.current_price > 0 ? <strong>{money(item.current_price)}</strong> : <strong>Ver oferta</strong>}
                       </p>
-                      {item.payment_hint ? <p className="hint">{item.payment_hint}</p> : null}
                       <div className="foot">
                         <span>{relative(item.source_created_at || item.observed_at)}</span>
                         {item.purchase_url ? (
@@ -352,6 +328,7 @@ export default function Hub() {
               })}
             </div>
           )}
+          <Pager page={page} pageCount={pageCount} total={total} pageSize={PAGE_SIZE} onPage={setPage} />
         </section>
       </div>
     </>
