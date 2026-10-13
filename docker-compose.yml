@@ -18,8 +18,7 @@ services:
 
   backend:
     container_name: pricedev-backend
-    build:
-      context: ./backend
+    image: 172.21.70.155/pricedev/backend:latest
     env_file:
       - .env
     environment:
@@ -37,8 +36,7 @@ services:
 
   frontend:
     container_name: pricedev-frontend
-    build:
-      context: ./frontend
+    image: 172.21.70.155/pricedev/frontend:latest
     ports:
       - "${PRICEDEV_UI_PORT:-5173}:80"
     depends_on:

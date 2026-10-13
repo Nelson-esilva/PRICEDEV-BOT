@@ -5,6 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Select, func, select
+from sqlalchemy.sql.functions import coalesce
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -16,26 +17,23 @@ from app.schemas.api import OpportunityListOut, OpportunityOut
 router = APIRouter()
 
 
-@router.get("/opportunities", response_model=OpportunityListOut)
-async def list_opportunities(
-    session: AsyncSession = Depends(get_session),
-    source: str | None = None,
-    merchant: str | None = None,
-    category: str | None = None,
-    classification: str | None = None,
-    price_verified: bool | None = None,
-    min_score: int | None = Query(default=None),
-    min_discount: float | None = Query(default=None),
-    max_price: float | None = Query(default=None),
-    min_price: float | None = Query(default=None),
-    status: str = "active",
-    since: datetime | None = None,
-    q: str | None = None,
-    store: str | None = None,
-    reason: str | None = None,
-    limit: int = Query(default=50, ge=1, le=400),
-    offset: int = Query(default=0, ge=0),
-) -> OpportunityListOut:
+def _filtered_queries(
+    *,
+    source: str | None,
+    merchant: str | None,
+    category: str | None,
+    classification: str | None,
+    price_verified: bool | None,
+    min_score: int | None,
+    min_discount: float | None,
+    max_price: float | None,
+    min_price: float | None,
+    status: str | None,
+    since: datetime | None,
+    q: str | None,
+    store: str | None,
+    reason: str | None,
+) -> tuple[Select, Select]:
     stmt: Select = select(Opportunity)
     count_stmt = select(func.count()).select_from(Opportunity)
     if source:
@@ -104,8 +102,71 @@ async def list_opportunities(
         stmt = stmt.where(Opportunity.status == status)
         count_stmt = count_stmt.where(Opportunity.status == status)
     if since:
-        stmt = stmt.where(Opportunity.detected_at >= since)
-        count_stmt = count_stmt.where(Opportunity.detected_at >= since)
+        recent_clause = coalesce(Opportunity.source_created_at, Opportunity.detected_at) >= since
+        stmt = stmt.where(recent_clause)
+        count_stmt = count_stmt.where(recent_clause)
+    return stmt, count_stmt
+
+
+def _filters_kwargs(
+    source: str | None,
+    merchant: str | None,
+    category: str | None,
+    classification: str | None,
+    price_verified: bool | None,
+    min_score: int | None,
+    min_discount: float | None,
+    max_price: float | None,
+    min_price: float | None,
+    status: str,
+    since: datetime | None,
+    q: str | None,
+    store: str | None,
+    reason: str | None,
+) -> dict:
+    return {
+        "source": source,
+        "merchant": merchant,
+        "category": category,
+        "classification": classification,
+        "price_verified": price_verified,
+        "min_score": min_score,
+        "min_discount": min_discount,
+        "max_price": max_price,
+        "min_price": min_price,
+        "status": status,
+        "since": since,
+        "q": q,
+        "store": store,
+        "reason": reason,
+    }
+
+
+@router.get("/opportunities", response_model=OpportunityListOut)
+async def list_opportunities(
+    session: AsyncSession = Depends(get_session),
+    source: str | None = None,
+    merchant: str | None = None,
+    category: str | None = None,
+    classification: str | None = None,
+    price_verified: bool | None = None,
+    min_score: int | None = Query(default=None),
+    min_discount: float | None = Query(default=None),
+    max_price: float | None = Query(default=None),
+    min_price: float | None = Query(default=None),
+    status: str = "active",
+    since: datetime | None = None,
+    q: str | None = None,
+    store: str | None = None,
+    reason: str | None = None,
+    limit: int = Query(default=50, ge=1, le=400),
+    offset: int = Query(default=0, ge=0),
+) -> OpportunityListOut:
+    stmt, count_stmt = _filtered_queries(**_filters_kwargs(
+        source, merchant, category, classification, price_verified,
+        min_score, min_discount, max_price, min_price,
+        status, since, q, store, reason,
+    ))
     total = (await session.execute(count_stmt)).scalar_one()
     order = (
         Opportunity.detected_at.desc(),
@@ -114,6 +175,41 @@ async def list_opportunities(
     rows = list(
         (await session.execute(stmt.order_by(*order).offset(offset).limit(limit))).scalars()
     )
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    return OpportunityListOut(items=[_to_out(row, settings) for row in rows], total=total)
+
+
+@router.get("/opportunities/all", response_model=OpportunityListOut)
+async def list_all_opportunities(
+    session: AsyncSession = Depends(get_session),
+    source: str | None = None,
+    merchant: str | None = None,
+    category: str | None = None,
+    classification: str | None = None,
+    price_verified: bool | None = None,
+    min_score: int | None = Query(default=None),
+    min_discount: float | None = Query(default=None),
+    max_price: float | None = Query(default=None),
+    min_price: float | None = Query(default=None),
+    status: str = "active",
+    since: datetime | None = None,
+    q: str | None = None,
+    store: str | None = None,
+    reason: str | None = None,
+) -> OpportunityListOut:
+    stmt, count_stmt = _filtered_queries(**_filters_kwargs(
+        source, merchant, category, classification, price_verified,
+        min_score, min_discount, max_price, min_price,
+        status, since, q, store, reason,
+    ))
+    total = (await session.execute(count_stmt)).scalar_one()
+    order = (
+        Opportunity.detected_at.desc(),
+        Opportunity.source_created_at.desc(),
+    )
+    rows = list((await session.execute(stmt.order_by(*order))).scalars())
     from app.core.config import get_settings
 
     settings = get_settings()
