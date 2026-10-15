@@ -33,6 +33,13 @@ export type Opportunity = {
 };
 
 const API = "";
+const OPS_TOKEN = import.meta.env.VITE_OPS_TOKEN ?? "";
+
+function opsHeaders(extra?: HeadersInit): HeadersInit {
+  const headers = new Headers(extra);
+  if (OPS_TOKEN) headers.set("Authorization", `Bearer ${OPS_TOKEN}`);
+  return headers;
+}
 
 function withParams(opts: Record<string, string | number | undefined>) {
   const params = new URLSearchParams();
@@ -64,7 +71,9 @@ export async function fetchOpportunities(
     category: opts.category,
     reason: opts.reason,
   });
-  const response = await fetch(`${API}/api/v1/opportunities?${params.toString()}`);
+  const response = await fetch(`${API}/api/v1/opportunities?${params.toString()}`, {
+    headers: opsHeaders(),
+  });
   if (!response.ok) throw new Error("Falha ao carregar oportunidades");
   return response.json();
 }
@@ -106,7 +115,13 @@ export async function fetchInbox(
     chat?: string;
     category?: string;
   } = {},
-): Promise<{ items: InboxItem[]; total: number; listening: boolean }> {
+): Promise<{
+    items: InboxItem[];
+    total: number;
+    listening: boolean;
+    listen_state?: string;
+    chats?: { title: string; count: number }[];
+  }> {
   const params = withParams({
     limit: opts.limit ?? 48,
     offset: opts.offset ?? 0,
@@ -115,7 +130,9 @@ export async function fetchInbox(
     chat: opts.chat,
     category: opts.category,
   });
-  const response = await fetch(`${API}/api/v1/inbox?${params.toString()}`);
+  const response = await fetch(`${API}/api/v1/inbox?${params.toString()}`, {
+    headers: opsHeaders(),
+  });
   if (!response.ok) throw new Error("Falha ao carregar os canais");
   return response.json();
 }
@@ -123,7 +140,7 @@ export async function fetchInbox(
 export async function addWatch(url: string): Promise<WatchItem> {
   const response = await fetch(`${API}/api/v1/watchlist`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: opsHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ url }),
   });
   if (!response.ok) throw new Error("Link inválido ou recusado");

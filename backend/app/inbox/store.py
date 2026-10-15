@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from app.core.db import as_utc, get_session_factory, utcnow
 from app.affiliates.resolver import resolve_links, stamp_owned_link
 from app.core.config import get_settings
-from app.inbox.extract import describe_link, pick_product_url
+from app.inbox.extract import describe_link, extract_coupon_links, needs_resolve, pick_product_url
 from app.inbox.media import resolve_catalog_image
 from app.inbox.parse import parse_deal
 from app.inbox.resolve import unveil_urls
@@ -53,8 +55,11 @@ async def save_channel_post(
     extra: dict | None = None,
     image_url: str | None = None,
 ) -> InboxMessage | None:
-    unveiled = await unveil_urls(urls)
-    purchase = pick_product_url(unveiled) or pick_product_url(urls)
+    purchase = pick_product_url(urls, text)
+    unveiled: list[str] = []
+    if purchase is None or needs_resolve(purchase):
+        unveiled = await unveil_urls(urls)
+        purchase = pick_product_url(unveiled, text) or purchase
     if purchase is None:
         return None
     marketplace, native = describe_link(purchase)
@@ -67,48 +72,70 @@ async def save_channel_post(
     )
     settings = get_settings()
     affiliate = stamp_owned_link(purchase, settings)
-    if affiliate is None:
+    if affiliate is None and marketplace in {"shopee", "afiliado"}:
         links = await resolve_links(original_url=purchase, existing_affiliate=None, settings=settings)
         affiliate = links.affiliate
+    coupon_links = extract_coupon_links(text, urls + unveiled, purchase)
     factory = get_session_factory()
-    async with factory() as session:
-        existing = (
-            await session.execute(
-                select(InboxMessage).where(
-                    InboxMessage.channel == channel,
-                    InboxMessage.chat_id == str(chat_id),
-                    InboxMessage.message_id == str(message_id),
+    last_error: OperationalError | None = None
+    for attempt in range(4):
+        try:
+            async with factory() as session:
+                existing = (
+                    await session.execute(
+                        select(InboxMessage).where(
+                            InboxMessage.channel == channel,
+                            InboxMessage.chat_id == str(chat_id),
+                            InboxMessage.message_id == str(message_id),
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing:
+                    dirty = False
+                    if picture and not existing.image_url:
+                        existing.image_url = picture
+                        dirty = True
+                    if affiliate and not existing.affiliate_url:
+                        existing.affiliate_url = affiliate
+                        dirty = True
+                    payload = dict(existing.raw_payload or {})
+                    if coupon_links and not payload.get("coupon_links"):
+                        payload["coupon_links"] = coupon_links
+                        existing.raw_payload = payload
+                        dirty = True
+                    if dirty:
+                        await session.commit()
+                    return None
+                row = InboxMessage(
+                    channel=channel,
+                    chat_id=str(chat_id),
+                    chat_title=(chat_title or "")[:256],
+                    message_id=str(message_id),
+                    product_name=parsed.title,
+                    body=(text or "")[:4000] or None,
+                    purchase_url=purchase,
+                    marketplace=marketplace,
+                    native_product_id=native,
+                    image_url=picture,
+                    affiliate_url=affiliate,
+                    posted_at=as_utc(posted_at) or utcnow(),
+                    received_at=utcnow(),
+                    raw_payload={
+                        "urls": urls,
+                        "resolved": unveiled,
+                        "coupon_links": coupon_links,
+                        **(extra or {}),
+                    },
                 )
-            )
-        ).scalar_one_or_none()
-        if existing:
-            dirty = False
-            if picture and not existing.image_url:
-                existing.image_url = picture
-                dirty = True
-            if affiliate and not existing.affiliate_url:
-                existing.affiliate_url = affiliate
-                dirty = True
-            if dirty:
+                session.add(row)
                 await session.commit()
-            return None
-        row = InboxMessage(
-            channel=channel,
-            chat_id=str(chat_id),
-            chat_title=(chat_title or "")[:256],
-            message_id=str(message_id),
-            product_name=parsed.title,
-            body=(text or "")[:4000] or None,
-            purchase_url=purchase,
-            marketplace=marketplace,
-            native_product_id=native,
-            image_url=picture,
-            affiliate_url=affiliate,
-            posted_at=as_utc(posted_at) or utcnow(),
-            received_at=utcnow(),
-            raw_payload={"urls": urls, "resolved": unveiled, **(extra or {})},
-        )
-        session.add(row)
-        await session.commit()
-        await session.refresh(row)
-        return row
+                await session.refresh(row)
+                return row
+        except OperationalError as exc:
+            last_error = exc
+            if "locked" not in str(exc).lower() or attempt == 3:
+                raise
+            await asyncio.sleep(0.25 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return None

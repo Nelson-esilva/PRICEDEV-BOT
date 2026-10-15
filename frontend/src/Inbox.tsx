@@ -55,7 +55,9 @@ function categoryOf(item: InboxItem) {
 export default function Inbox() {
   const [items, setItems] = useState<InboxItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [chats, setChats] = useState<{ title: string; count: number }[]>([]);
   const [listening, setListening] = useState(false);
+  const [listenState, setListenState] = useState("off");
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [store, setStore] = useState("");
@@ -85,7 +87,9 @@ export default function Inbox() {
         if (!alive) return;
         setItems(data.items);
         setTotal(data.total);
+        setChats(data.chats ?? []);
         setListening(data.listening);
+        setListenState(data.listen_state || (data.listening ? "live" : "off"));
         setError(null);
       } catch (err) {
         if (!alive) return;
@@ -103,9 +107,13 @@ export default function Inbox() {
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const groups = useMemo(() => {
+    if (chats.length) return chats;
     const names = new Set(items.map((item) => item.chat_title).filter(Boolean));
-    return [...names].sort((left, right) => left.localeCompare(right, "pt"));
-  }, [items]);
+    return [...names].sort((left, right) => left.localeCompare(right, "pt")).map((title) => ({
+      title,
+      count: items.filter((item) => item.chat_title === title).length,
+    }));
+  }, [chats, items]);
 
   const storeTabs = useMemo(() => {
     const present = new Set(items.map((item) => item.marketplace));
@@ -118,6 +126,8 @@ export default function Inbox() {
   }, [items, sort]);
 
   function countByGroup(name: string) {
+    const found = chats.find((chat) => chat.title === name);
+    if (found) return found.count;
     return items.filter((item) => item.chat_title === name).length;
   }
   function countByCategory(id: string) {
@@ -154,7 +164,7 @@ export default function Inbox() {
             <b>{total || items.length}</b> posts hoje
           </span>
           <span className={`pill ${listening ? "accent" : ""}`}>
-            <b>{listening ? "ligada" : "off"}</b> escuta
+            <b>{listening ? "ligada" : listenState === "off" ? "off" : listenState.replaceAll("_", " ")}</b> escuta
           </span>
         </div>
       </header>
@@ -209,10 +219,15 @@ export default function Inbox() {
             <span>Todos os grupos</span>
             <b>{total}</b>
           </button>
-          {groups.map((name) => (
-            <button key={name} className={source === name ? "side-item on" : "side-item"} type="button" onClick={() => setSource(name)}>
-              <span>{name}</span>
-              <b>{countByGroup(name)}</b>
+          {groups.map((group) => (
+            <button
+              key={group.title}
+              className={source === group.title ? "side-item on" : "side-item"}
+              type="button"
+              onClick={() => setSource(group.title)}
+            >
+              <span>{group.title}</span>
+              <b>{group.count}</b>
             </button>
           ))}
 

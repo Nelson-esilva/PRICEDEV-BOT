@@ -10,11 +10,13 @@ from app.core.db import get_session_factory, utcnow
 from app.core.logging import get_logger
 from app.inbox.media import media_path
 from app.models.entities import (
+    DealClick,
     InboxMessage,
     Opportunity,
     PriceObservation,
     Product,
     PublicationLog,
+    PublishedDeal,
     SourceMetricSample,
 )
 
@@ -49,8 +51,11 @@ async def purge_stale_promos(
     *,
     days: int,
     now: datetime | None = None,
+    storefront_days: int = 14,
+    click_days: int = 90,
 ) -> dict[str, int]:
-    cutoff = (now or utcnow()) - timedelta(days=max(1, days))
+    moment = now or utcnow()
+    cutoff = moment - timedelta(days=max(1, days))
 
     inbox_urls = (
         await session.execute(
@@ -92,6 +97,20 @@ async def purge_stale_promos(
         )
     ).rowcount or 0
 
+    storefront_cutoff = moment - timedelta(days=max(1, storefront_days))
+    click_cutoff = moment - timedelta(days=max(1, click_days))
+    published = (
+        await session.execute(
+            delete(PublishedDeal).where(
+                PublishedDeal.status == "expired",
+                PublishedDeal.updated_at < storefront_cutoff,
+            )
+        )
+    ).rowcount or 0
+    clicks = (
+        await session.execute(delete(DealClick).where(DealClick.clicked_at < click_cutoff))
+    ).rowcount or 0
+
     kept_urls = (await session.execute(select(InboxMessage.image_url))).scalars().all()
     kept_media = {name for url in kept_urls if (name := _media_name(url))}
     media = _unlink_media(doomed_media - kept_media)
@@ -105,6 +124,8 @@ async def purge_stale_promos(
         "publications": publications,
         "metrics": metrics,
         "media": media,
+        "published": published,
+        "clicks": clicks,
         "days": days,
     }
 
@@ -120,7 +141,13 @@ async def run_retention(
         return {"skipped": 1}
     factory = get_session_factory()
     async with factory() as session:
-        stats = await purge_stale_promos(session, days=days, now=now)
+        stats = await purge_stale_promos(
+            session,
+            days=days,
+            now=now,
+            storefront_days=settings.storefront_retention_days,
+            click_days=settings.click_log_retention_days,
+        )
         await session.commit()
     log.info("retention_ok", **stats)
     return stats

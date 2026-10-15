@@ -18,6 +18,8 @@ class OutgoingDeal:
     photo_url: str | None
     dedup_key: str
     opportunity_id: str
+    button_url: str | None = None
+    button_label: str = "Abrir oferta"
 
 
 _queue: asyncio.Queue[OutgoingDeal] | None = None
@@ -127,28 +129,38 @@ async def _delete_posted(client, chat: str, posted) -> None:
         log.warning("telegram_photo_delete_fail", error=str(exc)[:160])
 
 
+def _buttons(deal: OutgoingDeal):
+    url = (deal.button_url or "").strip()
+    if not url:
+        return None
+    from telethon.tl.custom import Button
+
+    return [[Button.url((deal.button_label or "Abrir oferta")[:64], url)]]
+
+
 async def send_via_telethon(client, deal: OutgoingDeal) -> None:
     text = (deal.text or "").strip()[:_CAPTION_MAX]
     if not text:
         return
+    buttons = _buttons(deal)
     if deal.photo_url:
         try:
             photo = await _photo_jpeg(deal.photo_url)
             if photo is not None:
-                posted = await client.send_file(
+                await client.send_file(
                     deal.chat,
                     photo,
                     caption=text,
                     parse_mode="html",
                     force_document=False,
+                    buttons=buttons,
                 )
-                if _caption_stuck(posted, text):
-                    return
-                await _delete_posted(client, deal.chat, posted)
-                log.warning("telegram_photo_without_caption")
+                return
         except Exception as exc:
             log.warning("telegram_photo_skip", error=str(exc)[:160])
-    await client.send_message(deal.chat, text, link_preview=False, parse_mode="html")
+    await client.send_message(
+        deal.chat, text, link_preview=False, parse_mode="html", buttons=buttons
+    )
 
 
 async def pump(client) -> None:

@@ -1,4 +1,15 @@
-from app.inbox.extract import describe_link, extract_image_urls, extract_urls, needs_resolve, pick_product_url, title_from_text
+from app.inbox.extract import (
+    describe_link,
+    extract_coupon_links,
+    extract_image_urls,
+    extract_urls,
+    inbox_campaign_key,
+    inbox_identity_key,
+    is_coupon_mechan,
+    needs_resolve,
+    pick_product_url,
+    title_from_text,
+)
 from app.inbox.media import amazon_image, catalog_image
 
 
@@ -28,6 +39,66 @@ def test_keeps_affiliate_short_links():
     assert needs_resolve("https://amzn.to/abc123") is True
 
 
+def test_extracts_coupon_links_after_resgate_block():
+    text = (
+        "Cooktop Itatiaia Essencial 4 Bocas Preto\n"
+        "🔥 R$ 234 no PIX\n"
+        "https://s.shopee.com.br/produtoCooktop\n"
+        "🎟️ Resgate todos os cupons\n"
+        "1. https://s.shopee.com.br/8AWstpqRdH\n"
+        "2. https://s.shopee.com.br/905ztMrfjp\n"
+    )
+    urls = extract_urls(text)
+    product = "https://s.shopee.com.br/produtoCooktop"
+    coupons = extract_coupon_links(text, urls, product)
+    assert coupons == [
+        "https://s.shopee.com.br/8AWstpqRdH",
+        "https://s.shopee.com.br/905ztMrfjp",
+    ]
+    assert extract_coupon_links("só produto https://s.shopee.com.br/abc", urls, product) == []
+
+
+def test_coupon_off_text_does_not_steal_product_link():
+    text = (
+        'Smart TV TCL 65"\n'
+        "🔥 R$ 5.625 no PIX\n"
+        "🏷 Aplique o cupom de R$300 OFF no anúncio\n"
+        "🛒 Compre aqui: https://meli.la/2bWxsKt"
+    )
+    urls = extract_urls(text)
+    assert extract_coupon_links(text, urls, "https://meli.la/2bWxsKt") == []
+
+
+def test_detects_coupon_mechan_without_product():
+    title = "10% OFF a partir de R$ 89, Limite de R$ 20: FULL1510"
+    assert is_coupon_mechan(
+        text=title,
+        title=title,
+        url="https://heylink.me/customer9725",
+        native_id="",
+    )
+    assert not is_coupon_mechan(
+        text='Smart TV TCL 65" R$ 5.625 no PIX',
+        title="Smart TV TCL 65",
+        url="https://www.mercadolivre.com.br/tv/p/MLB77168316",
+        native_id="MLB77168316",
+    )
+
+
+def test_aliexpress_prefers_pc_link_over_coins_and_heylink():
+    text = (
+        "ESTOQUE NO BRASIL\n"
+        "R$ 251. Cupom: WOBR07\n"
+        "Vai abrir a página de moedas, clique no primeiro produto (pelo app do celular):\n"
+        "https://a.aliexpress.com/_c4IjZCtf\n"
+        "Link PC (Preço pode ser maior):\n"
+        "https://a.aliexpress.com/_c3ht2XVj\n"
+        "https://heylink.me/customer9725\n"
+    )
+    urls = extract_urls(text)
+    assert pick_product_url(urls, text) == "https://a.aliexpress.com/_c3ht2XVj"
+
+
 def test_extracts_store_image_from_text():
     urls = extract_image_urls("foto https://http2.mlstatic.com/D_NQ_NP_123-O.webp oferta")
     assert urls == ["https://http2.mlstatic.com/D_NQ_NP_123-O.webp"]
@@ -45,3 +116,35 @@ def test_prefers_resolved_store_over_shortener():
     ]
     assert pick_product_url(urls) == "https://www.kabum.com.br/produto/123456/ssd"
     assert describe_link("https://bit.ly/xyz")[0] == "afiliado"
+
+
+def test_same_item_different_captions_share_identity():
+    mlb = "https://www.mercadolivre.com.br/fone/p/MLB12345678?matt_word=a"
+    other = "https://produto.mercadolivre.com.br/MLB12345678-fone-barato"
+    assert inbox_identity_key("mercadolivre", "MLB12345678", mlb) == inbox_identity_key(
+        "mercadolivre", "MLB12345678", other
+    )
+    assert inbox_identity_key("amazon", "B0ABCDEFGH", "https://www.amazon.com.br/dp/B0ABCDEFGH") == (
+        "amazon:b0abcdefgh"
+    )
+    assert inbox_identity_key("unknown", "", mlb) == inbox_identity_key("unknown", "", other)
+    assert inbox_identity_key("shopee", "", "https://s.shopee.com.br/7faRKeFnHI") == ""
+    assert inbox_identity_key("shopee", "46054420959", "https://s.shopee.com.br/7faRKeFnHI") == (
+        "shopee:46054420959"
+    )
+    assert inbox_identity_key("amazon", "", "https://www.amazon.com.br/dp/B0CNKVYLF5?tag=x") == (
+        "amazon:b0cnkvylf5"
+    )
+    assert inbox_identity_key("amazon", "", "https://www.amazon.com.br/?tag=santanatech-20") == ""
+    assert inbox_campaign_key(
+        marketplace="amazon",
+        title="10% OFF em R$ 400, máx de R$ 100 OFF: PRIMEHOJE",
+        coupon="AMAZON",
+        price=100,
+        listed=400,
+    ) == inbox_campaign_key(
+        marketplace="amazon",
+        title="10% OFF a partir de R$ 400, Limite de R$ 100 OFF: PRIMEHOJE",
+        price=100,
+        listed=400,
+    )

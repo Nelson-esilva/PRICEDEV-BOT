@@ -151,7 +151,7 @@ export default function App() {
           offset: (page - 1) * PAGE_SIZE,
         });
         if (!alive) return;
-        setItems(data.items.filter((item) => item.source !== "mock" && item.source !== "mlhub"));
+        setItems(data.items.filter((item) => item.source !== "mock" && item.source !== "mlhub" && item.source !== "shopee"));
         setTotal(data.total);
         setError(null);
       } catch (err) {

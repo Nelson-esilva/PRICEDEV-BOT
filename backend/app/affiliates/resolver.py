@@ -11,8 +11,9 @@ from app.core.urls import is_ml_social_url, sanitize_purchase_url
 
 log = get_logger("affiliates")
 
-SHOPEE_HOSTS = {"shopee.com.br", "shope.ee", "shp.ee"}
+SHOPEE_HOSTS = {"shopee.com.br", "shope.ee", "shp.ee", "s.shopee.com.br"}
 AMAZON_SHORT_HOSTS = {"amzn.to", "amzn.asia", "a.co"}
+_SHOPEE_FOREIGN = re.compile(r"(?:mmp_pid|utm_source)=an_(\d+)", re.I)
 _ML_DROP = {"forceinapp", "ref", "matt_word", "matt_tool"}
 _ML_SKIP_PREFIXES = ("/afiliados", "/gz/", "/ajuda")
 _ML_SOCIAL_DROP = {"forceinapp", "matt_word", "matt_tool"}
@@ -128,6 +129,71 @@ def stamp_owned_link(url: str | None, settings: Settings) -> str | None:
     return stamp_mercadolivre(url, settings) or stamp_amazon(url, settings)
 
 
+def is_shopee_url(url: str | None) -> bool:
+    host = _host(url)
+    if not host:
+        return False
+    return host in SHOPEE_HOSTS or "shopee." in host
+
+
+def is_owned_shopee(url: str | None, settings: Settings) -> bool:
+    """Só aceita link com o app id deste bot. Short alheio / URL crua não passam."""
+    if not url or not is_shopee_url(url):
+        return False
+    app_id = (settings.shopee_app_id or "").strip()
+    if not app_id:
+        return False
+    marker = f"an_{app_id}"
+    low = url.lower()
+    if marker in low:
+        return True
+    foreign = _SHOPEE_FOREIGN.search(url)
+    if foreign and foreign.group(1) != app_id:
+        return False
+    return False
+
+
+def shopee_origin_url(url: str | None) -> str | None:
+    """URL limpa do produto pra generateShortLink (sem tracking de terceiros)."""
+    from app.ingestion.identity import parse_product_url
+
+    cleaned = sanitize_purchase_url(url) or (url or "").strip()
+    if not cleaned or not is_shopee_url(cleaned):
+        return None
+    market, native = parse_product_url(cleaned)
+    if market == "shopee" and native:
+        parsed = urlparse(cleaned)
+        path = parsed.path or ""
+        match = re.search(r"(?:i\.|/product/)(\d+)[./](\d+)", cleaned, re.I)
+        if not match:
+            match = re.search(r"/(\d{5,})/(\d{5,})(?:/|\?|$)", path)
+        if match:
+            shop, item = match.group(1), match.group(2)
+            return f"https://shopee.com.br/product/{shop}/{item}"
+        return f"https://shopee.com.br/product/-/{native}"
+    # Short / opaco: manda a URL sem query pra API tentar.
+    parsed = urlparse(cleaned)
+    return urlunparse(parsed._replace(query="", fragment=""))
+
+
+async def ensure_owned_shopee(
+    url: str | None,
+    settings: Settings,
+    *,
+    existing: str | None = None,
+    http: httpx.AsyncClient | None = None,
+) -> str | None:
+    for candidate in (existing, url):
+        if is_owned_shopee(candidate, settings):
+            return sanitize_purchase_url(candidate) or candidate
+    origin = shopee_origin_url(url) or shopee_origin_url(existing)
+    if not origin:
+        return None
+    if not (settings.enable_shopee and settings.shopee_app_id and settings.shopee_app_secret):
+        return None
+    return await _shopee_shortlink(origin, settings, http)
+
+
 async def resolve_links(
     *,
     original_url: str | None,
@@ -154,26 +220,34 @@ async def resolve_links(
                 network=network,
                 status="converted",
             )
+    if is_shopee_url(original) or is_shopee_url(affiliate):
+        owned = await ensure_owned_shopee(original, settings, existing=affiliate, http=http)
+        if owned:
+            return AffiliateResolution(
+                original=original_url,
+                validated=original,
+                affiliate=owned,
+                final=owned,
+                network="shopee",
+                status="converted",
+            )
+        return AffiliateResolution(
+            original=original_url,
+            validated=original,
+            affiliate=None,
+            final=None,
+            network="shopee",
+            status="unpublishable",
+        )
     if affiliate:
         return AffiliateResolution(
             original=original_url,
             validated=original,
             affiliate=affiliate,
             final=affiliate,
-            network="shopee" if _host(affiliate) in SHOPEE_HOSTS or "shopee" in _host(affiliate) else "unknown",
+            network="unknown",
             status="official",
         )
-    if original and _host(original) in SHOPEE_HOSTS and settings.enable_shopee and settings.shopee_app_id:
-        short = await _shopee_shortlink(original, settings, http)
-        if short:
-            return AffiliateResolution(
-                original=original_url,
-                validated=original,
-                affiliate=short,
-                final=short,
-                network="shopee",
-                status="converted",
-            )
     if original and settings.enable_lomadee and settings.lomadee_app_token:
         converted = await _lomadee_create_link(original, settings, http)
         if converted:

@@ -4,6 +4,9 @@ import Pager from "./Pager";
 
 const HUB_CATEGORIES = [
   { id: "", label: "Tudo" },
+  { id: "recomendados", label: "Shopee · Recomendados" },
+  { id: "comissao", label: "Shopee · Comissão" },
+  { id: "top", label: "Shopee · Top" },
   { id: "Acessórios para Veículos", label: "Acessórios para Veículos" },
   { id: "Agro", label: "Agro" },
   { id: "Antiguidades e Coleções", label: "Antiguidades e Coleções" },
@@ -72,6 +75,17 @@ function isBest(item: Opportunity) {
   return reasonsOf(item).includes("hub_best");
 }
 
+function storeOf(item: Opportunity) {
+  if (item.source === "shopee") return { id: "shopee", label: "Shopee" };
+  return { id: "mercadolivre", label: "Mercado Livre" };
+}
+
+function hubSources(store: string) {
+  if (store === "shopee") return "shopee";
+  if (store === "mercadolivre") return "mlhub";
+  return "mlhub,shopee";
+}
+
 function discountOf(item: Opportunity) {
   if (item.announced_discount_pct != null && item.announced_discount_pct >= 5) {
     return Math.round(item.announced_discount_pct);
@@ -106,7 +120,7 @@ export default function Hub() {
     async function load() {
       try {
         const data = await fetchOpportunities({
-          source: "mlhub",
+          source: hubSources(store),
           q: query,
           category,
           reason: source === "best" ? "hub_best" : undefined,
@@ -133,15 +147,14 @@ export default function Hub() {
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const visible = useMemo(() => {
-    const filtered = store && store !== "mercadolivre" ? [] : items;
-    if (sort === "recent") return filtered;
-    const ranked = [...filtered];
+    if (sort === "recent") return items;
+    const ranked = [...items];
     ranked.sort((left, right) => {
       if (sort === "discount") return (discountOf(right) ?? -1) - (discountOf(left) ?? -1);
       return left.current_price - right.current_price;
     });
     return ranked;
-  }, [items, store, sort]);
+  }, [items, sort]);
 
   const freshCount = items.filter((item) => isFresh(item, 20)).length;
 
@@ -176,7 +189,7 @@ export default function Hub() {
       <header className="hero-row">
         <div>
           <h1>Hub agora</h1>
-          <p>Destaques do teu painel de afiliado do Mercado Livre.</p>
+          <p>Destaques de afiliado do Mercado Livre e da Shopee.</p>
         </div>
         <div className="pills">
           <span className="pill">
@@ -226,6 +239,14 @@ export default function Hub() {
           <i>M</i>
           Mercado Livre
         </button>
+        <button
+          className={`store-chip shopee ${store === "shopee" ? "on" : ""}`}
+          type="button"
+          onClick={() => setStore("shopee")}
+        >
+          <i>S</i>
+          Shopee
+        </button>
       </div>
 
       <div className="layout">
@@ -269,7 +290,7 @@ export default function Hub() {
             </label>
           </div>
 
-          {items.length === 0 && !(query.trim() || source || category || (store && store !== "mercadolivre")) ? (
+          {items.length === 0 && !(query.trim() || source || category || store) ? (
             <div className="empty">
               <h2>Buscando destaques…</h2>
               <p>O coletor está lendo o hub agora. As primeiras peças entram no próximo ciclo.</p>
@@ -284,6 +305,7 @@ export default function Hub() {
               {visible.map((item) => {
                 const off = discountOf(item);
                 const loved = saved.has(item.id);
+                const shop = storeOf(item);
                 return (
                   <article key={item.id} className="deal">
                     <div className="media">
@@ -304,7 +326,7 @@ export default function Hub() {
                     </div>
                     <div className="body">
                       <div className="store-row">
-                        <span className="store-name mercadolivre">Mercado Livre</span>
+                        <span className={`store-name ${shop.id}`}>{shop.label}</span>
                         {item.price_verified ? <span className="ok">Verificada</span> : null}
                       </div>
                       <h3>{item.product}</h3>

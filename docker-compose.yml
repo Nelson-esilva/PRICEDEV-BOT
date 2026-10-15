@@ -24,7 +24,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://pricedev:${POSTGRES_PASSWORD:-pricedev}@postgres:5432/pricedev
-      ENABLE_SCHEDULER: "true"
+      ENABLE_SCHEDULER: "false"
+      ENABLE_CHANNEL_INBOX: "false"
       TELEGRAM_SESSION_PATH: /var/lib/pricedev/telegram_inbox.session
       PRICEDEV_DATA_DIR: /var/lib/pricedev/data
     volumes:
@@ -35,12 +36,41 @@ services:
     expose:
       - "8000"
 
+  worker:
+    container_name: pricedev-worker
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pricedev:${POSTGRES_PASSWORD:-pricedev}@postgres:5432/pricedev
+      ENABLE_SCHEDULER: "true"
+      TELEGRAM_SESSION_PATH: /var/lib/pricedev/telegram_inbox.session
+      PRICEDEV_DATA_DIR: /var/lib/pricedev/data
+    volumes:
+      - pricedev_runtime:/var/lib/pricedev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m app.worker
+
   frontend:
     container_name: pricedev-frontend
     build:
       context: ./frontend
+      args:
+        VITE_OPS_TOKEN: ${OPS_API_TOKEN:-}
     ports:
       - "${PRICEDEV_UI_PORT:-5173}:80"
+    depends_on:
+      - backend
+
+  storefront:
+    container_name: pricedev-storefront
+    build:
+      context: ./storefront
+    ports:
+      - "${PRICEDEV_STORE_PORT:-5174}:80"
     depends_on:
       - backend
 

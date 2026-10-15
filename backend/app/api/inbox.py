@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import func, not_, or_, select
+from sqlalchemy import case, func, literal, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import as_utc, get_session
@@ -13,6 +13,7 @@ from app.inbox.parse import parse_deal
 from app.models.entities import InboxMessage
 
 router = APIRouter()
+media_router = APIRouter()
 
 
 class InboxItemOut(BaseModel):
@@ -33,10 +34,17 @@ class InboxItemOut(BaseModel):
     received_at: str
 
 
+class InboxChatOut(BaseModel):
+    title: str
+    count: int
+
+
 class InboxListOut(BaseModel):
     items: list[InboxItemOut]
     total: int
     listening: bool
+    listen_state: str = "off"
+    chats: list[InboxChatOut] = []
 
 
 def _iso(value) -> str:
@@ -70,6 +78,14 @@ def _out(row: InboxMessage, settings) -> InboxItemOut:
     )
 
 
+def _identity_expr():
+    native_key = InboxMessage.marketplace.op("||")(literal(":")).op("||")(InboxMessage.native_product_id)
+    return case(
+        (InboxMessage.native_product_id != "", native_key),
+        else_=func.coalesce(InboxMessage.purchase_url, InboxMessage.id),
+    )
+
+
 def _blocked_inbox(settings):
     tokens = settings.telegram_inbox_block_chat_list
     if not tokens:
@@ -98,6 +114,7 @@ async def list_inbox(
     marketplace: str | None = None,
     chat: str | None = None,
     category: str | None = None,
+    unique: bool = Query(default=False),
 ) -> InboxListOut:
     from app.core.config import get_settings
 
@@ -132,6 +149,35 @@ async def list_inbox(
     if cat_clause is not None:
         stmt = stmt.where(cat_clause)
         count_stmt = count_stmt.where(cat_clause)
+    if unique:
+        ranked = (
+            select(
+                InboxMessage.id.label("inbox_id"),
+                func.row_number()
+                .over(
+                    partition_by=_identity_expr(),
+                    order_by=(InboxMessage.posted_at.desc(), InboxMessage.received_at.desc()),
+                )
+                .label("rn"),
+            )
+        )
+        if blocked is not None:
+            ranked = ranked.where(not_(blocked))
+        if searched is not None:
+            ranked = ranked.where(searched)
+        if marketplace:
+            ranked = ranked.where(InboxMessage.marketplace == marketplace)
+        if chat_clause is not None:
+            ranked = ranked.where(chat_clause)
+        if cat_clause is not None:
+            ranked = ranked.where(cat_clause)
+        ranked = ranked.subquery()
+        stmt = (
+            select(InboxMessage)
+            .join(ranked, InboxMessage.id == ranked.c.inbox_id)
+            .where(ranked.c.rn == 1)
+        )
+        count_stmt = select(func.count()).select_from(ranked).where(ranked.c.rn == 1)
     total = (await session.execute(count_stmt)).scalar_one()
     rows = list(
         (
@@ -142,15 +188,24 @@ async def list_inbox(
             )
         ).scalars()
     )
-    await _hydrate_social(session, rows, settings)
-    await _hydrate_images(session, rows)
-    await _hydrate_affiliates(session, rows, settings)
+    chat_stmt = select(InboxMessage.chat_title, func.count()).group_by(InboxMessage.chat_title)
+    if blocked is not None:
+        chat_stmt = chat_stmt.where(not_(blocked))
+    if searched is not None:
+        chat_stmt = chat_stmt.where(searched)
+    if marketplace:
+        chat_stmt = chat_stmt.where(InboxMessage.marketplace == marketplace)
+    if cat_clause is not None:
+        chat_stmt = chat_stmt.where(cat_clause)
+    chat_rows = (await session.execute(chat_stmt.order_by(func.count().desc()))).all()
+    from app.inbox.telegram import connection_status, is_connected
+
     return InboxListOut(
         items=[_out(row, settings) for row in rows],
         total=total,
-        listening=bool(
-            settings.enable_channel_inbox and settings.telegram_api_id and settings.telegram_api_hash
-        ),
+        listening=is_connected(),
+        listen_state=connection_status(),
+        chats=[InboxChatOut(title=title or "Sem nome", count=int(count)) for title, count in chat_rows if title],
     )
 
 

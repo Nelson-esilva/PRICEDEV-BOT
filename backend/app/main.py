@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.go import router as go_router
 from app.api.health import router as health_router
+from app.api.inbox import media_router as inbox_media_router
 from app.api.inbox import router as inbox_router
 from app.api.opportunities import router as opportunities_router
+from app.api.ops_auth import require_ops
 from app.api.products import router as products_router
+from app.api.public import router as public_router
 from app.api.sources import router as sources_router
 from app.api.watchlist import router as watchlist_router
 from app.core.config import get_settings
@@ -33,7 +37,10 @@ async def lifespan(_app: FastAPI):
     if settings.enable_scheduler:
         tasks.append(asyncio.create_task(run_scheduler(settings)))
     if settings.enable_channel_inbox:
+        print("telegram_inbox task_start", flush=True)
         tasks.append(asyncio.create_task(run_telegram_inbox(settings)))
+    else:
+        print("telegram_inbox skipped_flag_off", flush=True)
     try:
         yield
     finally:
@@ -46,24 +53,29 @@ async def lifespan(_app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(title="PriceDev Bot", version="0.1.0", lifespan=lifespan)
+    origins = settings.public_cors_origin_list or [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8080",
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:8080",
-        ],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    ops = [Depends(require_ops)]
     app.include_router(health_router)
-    app.include_router(opportunities_router, prefix="/api/v1")
-    app.include_router(products_router, prefix="/api/v1")
-    app.include_router(sources_router, prefix="/api/v1")
-    app.include_router(watchlist_router, prefix="/api/v1")
-    app.include_router(inbox_router, prefix="/api/v1")
+    app.include_router(go_router)
+    app.include_router(public_router, prefix="/api/public/v1")
+    app.include_router(opportunities_router, prefix="/api/v1", dependencies=ops)
+    app.include_router(products_router, prefix="/api/v1", dependencies=ops)
+    app.include_router(sources_router, prefix="/api/v1", dependencies=ops)
+    app.include_router(watchlist_router, prefix="/api/v1", dependencies=ops)
+    app.include_router(inbox_router, prefix="/api/v1", dependencies=ops)
     return app
 
 

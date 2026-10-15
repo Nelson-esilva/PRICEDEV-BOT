@@ -12,6 +12,7 @@ from app.monitoring.quarantine import clear as clear_quarantine
 from app.monitoring.quarantine import trip as trip_quarantine
 from app.monitoring.retention import run_retention
 from app.publishing.telegram import publish_opportunity
+from app.storefront.catalog import PUBLIC_SOURCES, publish_public_catalog
 from app.sources.base import SourceAuthError, SourceBlocked, SourceConnector, SourceError
 from app.sources.registry import build_connectors
 
@@ -76,6 +77,11 @@ async def poll_source(connector: SourceConnector, settings: Settings) -> None:
                     if status == "published":
                         posted += 1
             await session.commit()
+        if connector.name in PUBLIC_SOURCES:
+            try:
+                await publish_public_catalog(settings)
+            except Exception as exc:
+                log.exception("catalog_after_poll_failed", source=connector.name, error=str(exc))
     except SourceBlocked as exc:
         await _fail(connector.name, str(exc), disable=False, blocked=True)
     except SourceAuthError as exc:
@@ -120,6 +126,7 @@ async def run_scheduler(settings: Settings | None = None) -> None:
     connectors = [c for c in build_connectors(settings) if c.is_enabled()]
     log.info("scheduler_start", sources=[c.name for c in connectors])
     last_retention = None
+    last_catalog = None
     try:
         while True:
             now = utcnow()
@@ -129,6 +136,13 @@ async def run_scheduler(settings: Settings | None = None) -> None:
                 except Exception as exc:
                     log.exception("retention_crash", error=str(exc))
                 last_retention = now
+            catalog_every = max(30, settings.storefront_publish_seconds)
+            if last_catalog is None or (now - last_catalog).total_seconds() >= catalog_every:
+                try:
+                    await publish_public_catalog(settings, now=now)
+                except Exception as exc:
+                    log.exception("catalog_crash", error=str(exc))
+                last_catalog = now
             for connector in connectors:
                 if not connector.is_enabled():
                     continue

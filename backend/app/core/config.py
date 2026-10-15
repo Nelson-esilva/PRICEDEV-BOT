@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     shopee_app_id: str = ""
     shopee_app_secret: str = ""
     shopee_keywords: str = "ssd,air fryer,monitor gamer,fone bluetooth,smartwatch"
+    shopee_max_items: int = 400
+    shopee_pages_per_list: int = 4
+    shopee_page_size: int = 50
     discovery_keywords: str = ""
     kabum_keywords: str = ""
     kabum_keywords_per_poll: int = 8
@@ -86,6 +89,8 @@ class Settings(BaseSettings):
     telegram_inbox_chats: str = ""
     telegram_inbox_block_chats: str = ""
     telegram_inbox_backfill: int = 40
+    # Janela em que o mesmo item não republica no grupo (horas).
+    telegram_dedup_hours: float = 3
 
     min_historical_discount_pct: float = 20
     min_acceptance_score: int = 75
@@ -99,6 +104,17 @@ class Settings(BaseSettings):
     allow_provisional_opportunities: bool = True
     allow_provisional_auto_publish: bool = False
     require_verified_price_for_historical_alert: bool = True
+
+    ops_api_token: str = ""
+    public_cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174,http://localhost:8080"
+    )
+    storefront_publish_seconds: int = 120
+    storefront_deal_ttl_hours: int = 36
+    storefront_retention_days: int = 14
+    click_log_retention_days: int = 90
+    storefront_min_score: int = 0
 
     score_weight_historical_discount: int = 30
     score_weight_history_quality: int = 20
@@ -131,6 +147,10 @@ class Settings(BaseSettings):
         from app.sources.kabum import DEFAULT_KEYWORDS
 
         return list(DEFAULT_KEYWORDS)
+
+    @property
+    def public_cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.public_cors_origins.split(",") if item.strip()]
 
     @property
     def score_weights(self) -> dict[str, int]:

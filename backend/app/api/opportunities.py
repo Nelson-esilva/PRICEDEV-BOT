@@ -39,11 +39,16 @@ async def list_opportunities(
     stmt: Select = select(Opportunity)
     count_stmt = select(func.count()).select_from(Opportunity)
     if source:
-        stmt = stmt.where(Opportunity.source == source)
-        count_stmt = count_stmt.where(Opportunity.source == source)
+        wanted = [item.strip() for item in source.split(",") if item.strip()]
+        if len(wanted) == 1:
+            stmt = stmt.where(Opportunity.source == wanted[0])
+            count_stmt = count_stmt.where(Opportunity.source == wanted[0])
+        elif wanted:
+            stmt = stmt.where(Opportunity.source.in_(wanted))
+            count_stmt = count_stmt.where(Opportunity.source.in_(wanted))
     else:
-        stmt = stmt.where(Opportunity.source != "mock", Opportunity.source != "mlhub")
-        count_stmt = count_stmt.where(Opportunity.source != "mock", Opportunity.source != "mlhub")
+        stmt = stmt.where(Opportunity.source.notin_(("mock", "mlhub", "shopee")))
+        count_stmt = count_stmt.where(Opportunity.source.notin_(("mock", "mlhub", "shopee")))
     if merchant:
         stmt = stmt.where(Opportunity.merchant.ilike(f"%{merchant}%"))
         count_stmt = count_stmt.where(Opportunity.merchant.ilike(f"%{merchant}%"))

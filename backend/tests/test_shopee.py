@@ -55,7 +55,7 @@ async def test_graphql_signs_exact_body():
     source = ShopeeSource(settings, client=client)
     payload = await source.product_offers(keyword="ssd", page=1, limit=20)
     offers = source.normalize_products(
-        payload, fetched_at=__import__("datetime").datetime(2026, 10, 1), keyword="ssd"
+        payload, fetched_at=__import__("datetime").datetime(2026, 10, 1)
     )
     assert captured["body"] == compact_json(json.loads(captured["body"])) or True
     assert captured["auth"].startswith("SHA256 Credential=123")
@@ -84,3 +84,35 @@ async def test_invalid_signature_disables():
 def test_disabled_without_credentials():
     source = ShopeeSource(Settings(enable_shopee=True, shopee_app_id="", shopee_app_secret=""))
     assert source.is_enabled() is False
+
+
+async def test_poll_lists_without_keyword():
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "productOfferV2": {
+                        "nodes": [],
+                        "pageInfo": {"page": 1, "limit": 50, "hasNextPage": False},
+                    }
+                }
+            },
+        )
+
+    source = ShopeeSource(
+        Settings(
+            enable_shopee=True,
+            shopee_app_id="123",
+            shopee_app_secret="sec",
+            shopee_pages_per_list=1,
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await source.poll()
+    assert captured
+    assert all("keyword" not in row.get("variables", {}) for row in captured)
+    assert {row["variables"]["listType"] for row in captured} == {0, 1, 2}

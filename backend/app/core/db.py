@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from sqlalchemy import DateTime, TypeDecorator
+from sqlalchemy import DateTime, TypeDecorator, event
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -83,6 +83,14 @@ def get_engine():
         if database_url.startswith("sqlite"):
             kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
         _engine = create_async_engine(database_url, **kwargs)
+        if database_url.startswith("sqlite"):
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _sqlite_pragma(dbapi_connection, _record) -> None:
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=30000")
+                cursor.close()
     return _engine
 
 

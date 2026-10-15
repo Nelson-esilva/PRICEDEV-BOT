@@ -48,3 +48,19 @@ def test_promo_then_parcel_without_de_por():
     )
     assert float(parsed.price) == 189.9
     assert parsed.installment_hint == "10x de R$ 18,99 sem juros"
+
+
+def test_pix_price_ignores_coupon_off_amount():
+    parsed = parse_deal(
+        'Smart TV TCL 65" SQD-Mini LED 4K Q7D Pro WiFi Bluetooth Google TV HDR10+ 144 Hz (65Q7DPRO)\n'
+        "\n"
+        "🔥 R$ 5.625 no PIX\n"
+        "🏷 Aplique o cupom de R$300 OFF no anúncio\n"
+        "\n"
+        "🛒 Compre aqui: https://meli.la/2bWxsKt"
+    )
+    assert "Smart TV TCL" in parsed.title
+    assert float(parsed.price) == 5625
+    assert parsed.listed_price is None
+    assert parsed.payment_hint == "Pix"
+    assert parsed.coupon == "R$ 300 OFF"

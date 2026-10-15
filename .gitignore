@@ -9,12 +9,16 @@ venv/
 backend/.venv/
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 backend/*.db
 backend/.pytest_cache/
 backend/.ruff_cache/
 backend/*.egg-info/
 frontend/node_modules/
 frontend/dist/
+storefront/node_modules/
+storefront/dist/
 .pytest_cache/
 .mypy_cache/
 *.log

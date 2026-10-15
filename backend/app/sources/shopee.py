@@ -20,13 +20,20 @@ log = get_logger("shopee")
 
 GRAPHQL_URL = "https://open-api.affiliate.shopee.com.br/graphql"
 
-# Docs oficiais 2026-10-01 (affiliateshopee.com.br/documentacao):
+# Docs oficiais (affiliateshopee.com.br/documentacao):
+# productOfferV2.listType: 0 recomendados, 1 maior comissão, 2 top performance.
 # productOfferV2.sortType: 1 relevância, 2 vendidos, 3 maior preço, 4 menor preço, 5 comissão.
-# NÃO existe "mais recentes" em productOfferV2.
-# shopeeOfferV2.sortType: 1 mais recentes, 2 maior comissão.
+# Keyword é opcional — sem ela a API devolve a vitrine de ofertas.
+# shopeeOfferV2.sortType: 1 mais recentes, 2 maior comissão (campanhas, sem preço de SKU).
 PRODUCT_OFFER_QUERY = """
-query ProductOffers($keyword: String, $page: Int, $limit: Int) {
-  productOfferV2(keyword: $keyword, page: $page, limit: $limit, listType: 0, sortType: 2) {
+query ProductOffers($keyword: String, $page: Int, $limit: Int, $listType: Int, $sortType: Int) {
+  productOfferV2(
+    keyword: $keyword
+    page: $page
+    limit: $limit
+    listType: $listType
+    sortType: $sortType
+  ) {
     nodes {
       itemId
       productName
@@ -85,6 +92,13 @@ def compact_json(body: dict[str, Any]) -> str:
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
 
 
+LISTS = (
+    (0, 2, "recomendados"),
+    (1, 5, "comissao"),
+    (2, 2, "top"),
+)
+
+
 class ShopeeSource(SourceConnector):
     name = "shopee"
 
@@ -114,21 +128,60 @@ class ShopeeSource(SourceConnector):
         if not self.is_enabled():
             return []
         fetched_at = now or utcnow()
+        cap = max(50, self.settings.shopee_max_items)
+        pages = max(1, self.settings.shopee_pages_per_list)
+        limit = min(50, max(10, self.settings.shopee_page_size))
+        seen: set[str] = set()
         offers: list[NormalizedOffer] = []
-        for keyword in self.settings.shopee_keyword_list[:5]:
-            payload = await self.product_offers(keyword=keyword, page=1, limit=20)
-            offers.extend(self.normalize_products(payload, fetched_at=fetched_at, keyword=keyword))
-        try:
-            await self.campaigns(page=1, limit=10)
-        except SourceError as exc:
-            log.warning("shopee_campaigns_unavailable", error=str(exc))
-        return offers
+        for list_type, sort_type, via in LISTS:
+            if len(offers) >= cap:
+                break
+            for page in range(1, pages + 1):
+                if len(offers) >= cap:
+                    break
+                payload = await self.product_offers(
+                    page=page,
+                    limit=limit,
+                    list_type=list_type,
+                    sort_type=sort_type,
+                )
+                batch = self.normalize_products(payload, fetched_at=fetched_at, via=via)
+                if not batch:
+                    break
+                for offer in batch:
+                    if offer.native_product_id in seen:
+                        continue
+                    seen.add(offer.native_product_id)
+                    offers.append(offer)
+                    if len(offers) >= cap:
+                        break
+                info = (((payload.get("data") or {}).get("productOfferV2") or {}).get("pageInfo")) or {}
+                if info.get("hasNextPage") is False:
+                    break
+        log.info("shopee_poll", received=len(offers), via="lists")
+        return offers[:cap]
 
-    async def product_offers(self, *, keyword: str, page: int, limit: int) -> dict[str, Any]:
+    async def product_offers(
+        self,
+        *,
+        page: int,
+        limit: int,
+        keyword: str | None = None,
+        list_type: int = 0,
+        sort_type: int = 2,
+    ) -> dict[str, Any]:
+        variables: dict[str, Any] = {
+            "page": page,
+            "limit": limit,
+            "listType": list_type,
+            "sortType": sort_type,
+        }
+        if keyword:
+            variables["keyword"] = keyword
         body = {
             "query": PRODUCT_OFFER_QUERY,
             "operationName": "ProductOffers",
-            "variables": {"keyword": keyword, "page": page, "limit": limit},
+            "variables": variables,
         }
         return await self._graphql(body)
 
@@ -186,13 +239,13 @@ class ShopeeSource(SourceConnector):
         return data
 
     def normalize_products(
-        self, payload: dict[str, Any], *, fetched_at: datetime, keyword: str
+        self, payload: dict[str, Any], *, fetched_at: datetime, via: str = "recomendados"
     ) -> list[NormalizedOffer]:
         nodes = (((payload.get("data") or {}).get("productOfferV2") or {}).get("nodes")) or []
         offers: list[NormalizedOffer] = []
         for node in nodes:
             try:
-                offer = self._product_node(node, fetched_at, keyword)
+                offer = self._product_node(node, fetched_at, via)
             except Exception as exc:
                 log.warning("shopee_product_skip", error=str(exc))
                 continue
@@ -200,7 +253,7 @@ class ShopeeSource(SourceConnector):
                 offers.append(offer)
         return offers
 
-    def _product_node(self, node: dict[str, Any], fetched_at: datetime, keyword: str) -> NormalizedOffer | None:
+    def _product_node(self, node: dict[str, Any], fetched_at: datetime, via: str) -> NormalizedOffer | None:
         item_id = node.get("itemId")
         if item_id is None:
             return None
@@ -228,7 +281,7 @@ class ShopeeSource(SourceConnector):
             native_product_id=native,
             offer_id=native,
             product_name=str(node.get("productName") or "Produto Shopee"),
-            category=keyword,
+            category=via,
             listed_price=price,
             verified_price=price,
             effective_price=price,
@@ -243,7 +296,7 @@ class ShopeeSource(SourceConnector):
             announced_discount_pct=announced_pct,
             identity_confidence=IdentityConfidence.HIGH,
             price_verified=True,
-            raw_payload={"itemId": native, "keyword": keyword},
+            raw_payload={"itemId": native, "via": via},
         ).quantized()
 
     def normalize_campaigns(self, payload: dict[str, Any], *, fetched_at: datetime) -> list[NormalizedOffer]:

@@ -236,6 +236,7 @@ class InboxMessage(Base):
     __table_args__ = (
         UniqueConstraint("channel", "chat_id", "message_id", name="uq_inbox_message"),
         Index("ix_inbox_posted", "posted_at"),
+        Index("ix_inbox_identity", "marketplace", "native_product_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -269,3 +270,54 @@ class PublicationLog(Base):
     published_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
     skipped_reason: Mapped[str | None] = mapped_column(String(128))
     body: Mapped[str | None] = mapped_column(Text)
+
+
+class PublishedDeal(Base):
+    """Snapshot aprovado para a vitrine pública. Sem FK para overviver à retenção do ops."""
+
+    __tablename__ = "published_deals"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", name="uq_published_opportunity"),
+        UniqueConstraint("slug", name="uq_published_slug"),
+        Index("ix_published_status_updated", "status", "updated_at"),
+        Index("ix_published_store", "store", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    slug: Mapped[str] = mapped_column(String(160), nullable=False)
+    opportunity_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    product_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    store: Mapped[str] = mapped_column(String(64), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    merchant: Mapped[str | None] = mapped_column(String(256))
+    category: Mapped[str | None] = mapped_column(String(128))
+    image_url: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    coupon_code: Mapped[str | None] = mapped_column(String(128))
+    payment_hint: Mapped[str | None] = mapped_column(String(64))
+    current_price: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    list_price: Mapped[Decimal | None] = mapped_column(Money)
+    announced_discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    currency: Mapped[str] = mapped_column(String(8), default="BRL", nullable=False)
+    affiliate_network: Mapped[str | None] = mapped_column(String(64))
+    destination_url: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    published_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expired_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class DealClick(Base):
+    __tablename__ = "deal_clicks"
+    __table_args__ = (Index("ix_clicks_deal_at", "deal_id", "clicked_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    deal_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    slug: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    store: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    user_agent: Mapped[str | None] = mapped_column(String(256))
+    referer: Mapped[str | None] = mapped_column(String(512))
+    clicked_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)

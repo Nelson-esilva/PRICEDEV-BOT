@@ -7,9 +7,10 @@ from urllib.parse import parse_qs, urlparse
 from app.schemas.normalized import IdentityConfidence, NormalizedOffer
 
 _SHOPEE_ITEM = re.compile(r"(?:i\.|/product/)(\d+)[./](\d+)", re.I)
+_SHOPEE_PAIR = re.compile(r"/(\d{5,})/(\d{5,})(?:/|\?|$)")
 _AMAZON_ASIN = re.compile(r"/(?:dp|gp/product|gp/aw/d)/([A-Z0-9]{10})", re.I)
 _AMAZON_QUERY = re.compile(r"(?:^|[?&])asin=([A-Z0-9]{10})", re.I)
-_MLB = re.compile(r"(MLB-?\d{8,})", re.I)
+_MLB = re.compile(r"(MLBU\d{8,}|MLB-?\d{8,})", re.I)
 _KABUM = re.compile(r"/produto/(\d{3,})", re.I)
 _MAGALU = re.compile(r"/p/([a-z0-9]{8,})/?", re.I)
 _WEAK_PREFIXES = ("tmp-", "pelando-", "campaign-")
@@ -60,8 +61,8 @@ def parse_product_url(url: str | None) -> tuple[str | None, str | None]:
         if match:
             return "amazon", match.group(1).upper()
 
-    if "shopee.com" in host or _SHOPEE_ITEM.search(url):
-        match = _SHOPEE_ITEM.search(url)
+    if "shopee.com" in host or _SHOPEE_ITEM.search(url) or _SHOPEE_PAIR.search(path):
+        match = _SHOPEE_ITEM.search(url) or _SHOPEE_PAIR.search(path)
         if match:
             return "shopee", match.group(2)
 

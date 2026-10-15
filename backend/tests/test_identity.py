@@ -22,7 +22,14 @@ def test_mlb_from_url_replaces_pelando_id():
 
 def test_asin_and_shopee_and_kabum():
     assert parse_product_url("https://www.amazon.com.br/dp/B0ABCD1234") == ("amazon", "B0ABCD1234")
+    assert parse_product_url(
+        "https://www.mercadolivre.com.br/parafusadeira/p/MLBU29712786897"
+    ) == ("mercadolivre", "MLBU29712786897")
     assert parse_product_url("https://shopee.com.br/product/123/456") == ("shopee", "456")
+    assert parse_product_url("https://shopee.com.br/opaanlp/662418492/46054420959") == (
+        "shopee",
+        "46054420959",
+    )
     assert parse_product_url("https://www.kabum.com.br/produto/123456") == ("kabum", "123456")
     assert parse_product_url("https://www.magazineluiza.com.br/fone/p/ab12cd34ef/") == ("magalu", "ab12cd34ef")
 

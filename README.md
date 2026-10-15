@@ -1,10 +1,11 @@
 # PriceDev Bot
 
-Sistema local de inteligência de preços para o mercado brasileiro.
+Dois produtos no mesmo repositório:
 
-O v1 descobre ofertas por conectores (Pelando e Shopee, ambos opt-in), grava histórico append-only, classifica oportunidades e expõe API + dashboard.
+- **Ops** (`frontend/`): dashboard interno — Ofertas, Canais Telegram, Hub. Inteligência de preços, não é o site público.
+- **Vitrine** (`storefront/`): site consumidor (PromoDev) com Shopee + Mercado Livre oficiais e clique via `/go/{slug}` (afiliado stampado no servidor). Pelando e grupos **não** entram na vitrine.
 
-**Não usa Telegram como fonte.** Telegram, se ligado, é só publicação.
+O v1 descobre ofertas por conectores, grava histórico, classifica oportunidades e publica um catálogo `published_deals` para a vitrine.
 
 ## Início rápido
 
@@ -16,8 +17,11 @@ docker compose up --build
 ```
 
 - API: http://localhost:8000/docs  
-- Dashboard: http://localhost:5173  
+- Dashboard ops: http://localhost:5173  
+- Vitrine: http://localhost:5174 (`cd storefront && npm install && npm run dev`)  
 - Health: http://localhost:8000/health  
+
+No Docker o **worker** (scheduler + Telegram) é um processo separado da API. Se `OPS_API_TOKEN` estiver no `.env`, o dashboard interno exige o mesmo valor em `VITE_OPS_TOKEN` (no Vite local: `frontend/.env` com `VITE_OPS_TOKEN=...`).  
 
 Sem Docker (o `pyproject.toml` está em `backend/`, não na raiz):
 

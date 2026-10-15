@@ -21,7 +21,14 @@ _DE_POR = re.compile(
 )
 _RS = re.compile(r"R\$\s*([\d\.\,]+)", re.I)
 _BARE = re.compile(r"(?:^|[^\d])(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})(?:[^\d]|$)")
+_PIX_PRICE = re.compile(r"R\$\s*([\d\.\,]+)\s*(?:no\s+)?pix", re.I)
+_OFF_AROUND = re.compile(r"\boff\b|desconto|cupom\s+de|aplique\s+o\s+cupom", re.I)
 _COUPON = re.compile(r"(?:cupom|use o cupom)\s*[:\s]+([A-Z0-9]{4,24})", re.I)
+_OFF_COUPON = re.compile(
+    r"cupom\s+de\s+R\$\s*([\d\.\,]+)\s*OFF|"
+    r"(?:desconto|off)\s+de\s+R\$\s*([\d\.\,]+)",
+    re.I,
+)
 _INSTALLMENT = re.compile(
     r"(?P<n>\d{1,2})\s*x\s*(?:sem\s+juros\s*)?(?:de\s*)?(?:R\$\s*)?(?P<v>[\d\.\,]+)"
     r"|(?:em|ou|parcelad[oa]\s+em)\s+(?P<n2>\d{1,2})\s*x\s*(?:sem\s+juros\s*)?(?:de\s*)?(?:R\$\s*)?(?P<v2>[\d\.\,]+)",
@@ -137,10 +144,18 @@ def _is_installment_context(text: str, start: int) -> bool:
     return bool(_INSTALLMENT_CTX.search(window))
 
 
+def _is_off_discount_context(text: str, start: int, end: int) -> bool:
+    """Ex.: 'cupom de R$300 OFF' — valor de desconto, não preço do produto."""
+    window = text[max(0, start - 48) : min(len(text), end + 20)]
+    return bool(_OFF_AROUND.search(window))
+
+
 def _cash_amounts(text: str, installment_amount: Decimal | None) -> list[Decimal]:
     found: list[Decimal] = []
     for match in _RS.finditer(text):
         if _is_installment_context(text, match.start()):
+            continue
+        if _is_off_discount_context(text, match.start(), match.end()):
             continue
         value = _money(match.group(1))
         if value is None:
@@ -152,6 +167,8 @@ def _cash_amounts(text: str, installment_amount: Decimal | None) -> list[Decimal
         return _drop_installment_lookalikes(found)
     for match in _BARE.finditer(text):
         if _is_installment_context(text, match.start()):
+            continue
+        if _is_off_discount_context(text, match.start(), match.end()):
             continue
         value = _money(match.group(1))
         if value is None:
@@ -187,6 +204,14 @@ def _prices(text: str, *, installment_amount: Decimal | None = None) -> tuple[De
         listed, current = _money(match.group(1)), _money(match.group(2))
         if current and (installment_amount is None or current != installment_amount):
             return listed, current
+    pix = _PIX_PRICE.search(text)
+    pix_price = _money(pix.group(1)) if pix else None
+    if pix_price and (installment_amount is None or pix_price != installment_amount):
+        if not _is_off_discount_context(text, pix.start(), pix.end()):
+            found = _cash_amounts(text, installment_amount)
+            others = [value for value in found if value != pix_price]
+            listed = others[0] if others and others[0] > pix_price else None
+            return listed, pix_price
     found = _cash_amounts(text, installment_amount)
     if not found:
         return None, None
@@ -197,9 +222,20 @@ def _prices(text: str, *, installment_amount: Decimal | None = None) -> tuple[De
 
 def _coupon(text: str) -> str | None:
     match = _COUPON.search(text or "")
-    if not match:
+    if match:
+        return match.group(1).upper()
+    off = _OFF_COUPON.search(text or "")
+    if not off:
         return None
-    return match.group(1).upper()
+    amount = _money(next((group for group in off.groups() if group), ""))
+    if amount is None:
+        return None
+    quantized = amount.quantize(Decimal("1") if amount == amount.to_integral_value() else Decimal("0.01"))
+    if quantized == quantized.to_integral_value():
+        label = f"R$ {int(quantized)}"
+    else:
+        label = f"R$ {quantized:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{label} OFF"
 
 
 def _clean_line(line: str) -> str:
