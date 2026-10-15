@@ -270,6 +270,17 @@ _COUPON_MECHAN = re.compile(
     r"resgate\s+(?:todos\s+os\s+)?cupons",
     re.I,
 )
+# Banner de cupom de canal (ex.: Garimpos da Tata): % OFF + a partir + limite + código.
+# O link costuma resolver pra um MLB/MLBU aleatório — native_id NÃO libera.
+# NÃO incluir rodapé ("conheça nossos grupos") — quase todo post de canal tem isso.
+_OFF_BANNER = re.compile(
+    r"\d+\s*%\s*off\s+(?:a\s+partir\s+de|em)\s+r\$\s*[\d.,]+\s*,?\s*"
+    r"(?:limite|m[aá]x(?:imo)?)\s+(?:de\s+)?r\$|"
+    r"cupom\s+mercado\s+livre|"
+    r"cupom\s+amazon\b|"
+    r"resgatar\s+agora",
+    re.I,
+)
 
 
 def is_aggregator_url(url: str | None) -> bool:
@@ -289,12 +300,14 @@ def is_coupon_mechan(
     native_id: str | None = None,
 ) -> bool:
     """Banner/campanha de cupom sem produto real (mechan de outro grupo)."""
+    blob = f"{title or ''}\n{text or ''}"
+    if _OFF_BANNER.search(blob):
+        return True
+    if is_aggregator_url(url):
+        return True
     if (native_id or "").strip():
         return False
-    blob = f"{title or ''}\n{text or ''}"
-    campaign = bool(_COUPON_MECHAN.search(blob))
-    aggregator = is_aggregator_url(url)
-    return aggregator or campaign
+    return bool(_COUPON_MECHAN.search(blob))
 
 
 def inbox_fingerprint(title: str | None, marketplace: str | None) -> str:

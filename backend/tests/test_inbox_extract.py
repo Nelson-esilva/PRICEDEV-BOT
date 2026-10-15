@@ -85,6 +85,45 @@ def test_detects_coupon_mechan_without_product():
     )
 
 
+def test_blocks_meli_coupon_banner_even_with_mlbu():
+    """Campanha de cupom do canal: meli.la resolve pra MLBU, mas não é produto."""
+    body = (
+        "💸 Cupom Mercado Livre\n"
+        "🏷️ 30% OFF a partir de R$ 1, Limite de R$ 10000: 3PROMOMELI30\n"
+        "https://meli.la/2hbd5fB\n"
+        "🤝 Entre nos links do canal e vá até seu produto\n"
+        "https://heylink.me/customer9725\n"
+    )
+    title = "30% OFF a partir de R$ 1, Limite de R$ 10000: 3PROMOMELI30"
+    assert is_coupon_mechan(
+        text=body,
+        title=title,
+        url="https://www.mercadolivre.com.br/p/MLBU4828725477",
+        native_id="MLBU4828725477",
+    )
+    assert is_coupon_mechan(
+        text=title,
+        title=title,
+        url="https://meli.la/2hbd5fB",
+        native_id="MLBU4828725477",
+    )
+
+
+def test_real_product_with_channel_footer_is_not_mechan():
+    body = (
+        'Samsung Combo Smart TV 43" QLED\n'
+        "R$ 1801 Até 12x sem juros\n"
+        "https://www.amazon.com.br/dp/B0GVW8464B\n"
+        "📍conheça nossos Grupos de Ofertas e Redes sociais! https://heylink.me/customer9725\n"
+    )
+    assert not is_coupon_mechan(
+        text=body,
+        title='Samsung Combo Smart TV 43" QLED',
+        url="https://www.amazon.com.br/dp/B0GVW8464B",
+        native_id="B0GVW8464B",
+    )
+
+
 def test_aliexpress_prefers_pc_link_over_coins_and_heylink():
     text = (
         "ESTOQUE NO BRASIL\n"
@@ -107,6 +146,33 @@ def test_extracts_store_image_from_text():
 def test_amazon_cover_from_asin():
     assert amazon_image("B0ABCDEFGH") == "https://m.media-amazon.com/images/P/B0ABCDEFGH.01.LZZZZZZZ.jpg"
     assert catalog_image(marketplace="amazon", native_id="B0ABCDEFGH", text="")
+
+
+async def test_resolve_amazon_rejects_placeholder_gif(monkeypatch):
+    from app.inbox import media as media_mod
+
+    class _Resp:
+        status_code = 200
+        content = b"GIF89a" + b"\x00" * 37
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return _Resp()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(media_mod.httpx, "AsyncClient", _Client)
+    assert await media_mod.resolve_amazon_image("B0CJTB2QV2") is None
 
 
 def test_prefers_resolved_store_over_shortener():

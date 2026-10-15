@@ -34,10 +34,14 @@ def public_media_url(filename: str) -> str:
     return f"/api/v1/inbox/media/{filename}"
 
 
+_MIN_REMOTE_IMAGE = 2048
+
+
 def amazon_image(asin: str | None) -> str | None:
     token = (asin or "").strip().upper()
     if not _ASIN.fullmatch(token):
         return None
+    # URL canônica; muitas vezes a Amazon devolve GIF placeholder de 43 bytes.
     return f"https://m.media-amazon.com/images/P/{token}.01.LZZZZZZZ.jpg"
 
 
@@ -47,6 +51,41 @@ def catalog_image(*, marketplace: str, native_id: str, text: str | None, urls: l
         return pasted[0]
     if marketplace == "amazon":
         return amazon_image(native_id)
+    return None
+
+
+async def remote_image_ok(url: str | None, *, client: httpx.AsyncClient | None = None) -> bool:
+    """True só se a URL devolver JPEG/PNG de tamanho útil (não o GIF vazio da Amazon)."""
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        return False
+    close = client is None
+    http = client or httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+    try:
+        response = await http.get(raw)
+        if response.status_code >= 400:
+            return False
+        data = response.content or b""
+        if len(data) < _MIN_REMOTE_IMAGE:
+            return False
+        if data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG"):
+            return True
+        return False
+    except Exception:
+        return False
+    finally:
+        if close:
+            await http.aclose()
+
+
+async def resolve_amazon_image(
+    asin: str | None,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> str | None:
+    url = amazon_image(asin)
+    if url and await remote_image_ok(url, client=client):
+        return url
     return None
 
 
@@ -83,10 +122,13 @@ async def resolve_catalog_image(
     urls: list[str] | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> str | None:
-    found = catalog_image(marketplace=marketplace, native_id=native_id, text=text, urls=urls)
-    if found:
-        return found
-    if marketplace == "mercadolivre":
+    market = (marketplace or "").strip().lower()
+    pasted = extract_image_urls(text, urls)
+    if pasted:
+        return pasted[0]
+    if market == "amazon":
+        return await resolve_amazon_image(native_id, client=client)
+    if market == "mercadolivre":
         return await ml_thumbnail(native_id, client=client)
     return None
 
@@ -106,14 +148,28 @@ async def download_telegram_image(client, message, *, chat_id: str, message_id: 
     if client is None or not message_has_image(message):
         return None
     stem = re.sub(r"[^A-Za-z0-9_-]", "_", f"{chat_id}_{message_id}")[:80]
-    dest = media_dir() / stem
+    dest = media_dir() / f"{stem}.jpg"
+    # Evita Telethon criar "stem (1).jpg" (nome inválido pro _SAFE).
+    if dest.exists():
+        try:
+            dest.unlink()
+        except OSError:
+            pass
     try:
         path = await client.download_media(message, file=str(dest))
     except Exception:
         return None
     if not path:
         return None
-    name = Path(path).name
+    saved = Path(path)
+    name = saved.name
+    if not _SAFE.fullmatch(name):
+        safe = media_dir() / f"{stem}.jpg"
+        try:
+            saved.replace(safe)
+            name = safe.name
+        except OSError:
+            return None
     if not _SAFE.fullmatch(name):
         return None
     return public_media_url(name)

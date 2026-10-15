@@ -74,10 +74,14 @@ async def _photo_jpeg(photo: str) -> BytesIO | None:
         if not path.is_file():
             return None
         raw = path.read_bytes()
-    kind = _image_kind(raw or b"")
+    data = raw or b""
+    # GIF placeholder da Amazon (~43 bytes) e lixo similar não servem de capa.
+    if len(data) < 2048:
+        return None
+    kind = _image_kind(data)
     if kind not in {"jpg", "png"}:
         return None
-    buf = BytesIO(raw)
+    buf = BytesIO(data)
     buf.name = "oferta.jpg"
     return buf
 
@@ -143,24 +147,24 @@ async def send_via_telethon(client, deal: OutgoingDeal) -> None:
     if not text:
         return
     buttons = _buttons(deal)
-    if deal.photo_url:
-        try:
-            photo = await _photo_jpeg(deal.photo_url)
-            if photo is not None:
-                await client.send_file(
-                    deal.chat,
-                    photo,
-                    caption=text,
-                    parse_mode="html",
-                    force_document=False,
-                    buttons=buttons,
-                )
-                return
-        except Exception as exc:
-            log.warning("telegram_photo_skip", error=str(exc)[:160])
-    await client.send_message(
-        deal.chat, text, link_preview=False, parse_mode="html", buttons=buttons
-    )
+    if not deal.photo_url:
+        log.warning("telegram_skip_no_photo", key=deal.dedup_key)
+        return
+    try:
+        photo = await _photo_jpeg(deal.photo_url)
+        if photo is None:
+            log.warning("telegram_skip_bad_photo", key=deal.dedup_key)
+            return
+        await client.send_file(
+            deal.chat,
+            photo,
+            caption=text,
+            parse_mode="html",
+            force_document=False,
+            buttons=buttons,
+        )
+    except Exception as exc:
+        log.warning("telegram_photo_skip", error=str(exc)[:160], key=deal.dedup_key)
 
 
 async def pump(client) -> None:

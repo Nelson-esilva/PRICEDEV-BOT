@@ -159,7 +159,7 @@ def test_compacts_long_mercadolivre_url():
     )
     short = compact_affiliate_url(long_slug, settings)
     assert short == (
-        "https://www.mercadolivre.com.br/p/MLBU29712786897?matt_word=snmine&matt_tool=111"
+        "https://www.mercadolivre.com.br/up/MLBU29712786897?matt_word=snmine&matt_tool=111"
     )
     assert "parafusadeira" not in (short or "")
 

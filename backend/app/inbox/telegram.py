@@ -15,6 +15,7 @@ _uv = logging.getLogger("uvicorn.error")
 
 _connected = False
 _status = "off"
+_publish_queue: asyncio.Queue | None = None
 
 
 def is_connected() -> bool:
@@ -25,6 +26,30 @@ def connection_status() -> str:
     if _connected:
         return "live"
     return _status
+
+
+def _get_publish_queue() -> asyncio.Queue:
+    global _publish_queue
+    if _publish_queue is None:
+        _publish_queue = asyncio.Queue()
+    return _publish_queue
+
+
+async def _enqueue_publish(row, settings: Settings) -> None:
+    """Não bloqueia o poll/event — a publicação anda em fila própria."""
+    await _get_publish_queue().put((row, settings))
+
+
+async def _publish_worker() -> None:
+    queue = _get_publish_queue()
+    while True:
+        row, settings = await queue.get()
+        try:
+            await _publish_live(row, settings)
+        except Exception as exc:
+            log.warning("inbox_publish_worker_fail", error=str(exc)[:160])
+        finally:
+            queue.task_done()
 
 
 def _note(msg: str, **kwargs) -> None:
@@ -119,7 +144,17 @@ async def _ingest(settings: Settings, message, chat, client=None, *, live: bool 
         return False
     picture = None
     if client is not None:
-        picture = await download_telegram_image(client, message, chat_id=str(chat_id), message_id=str(message.id))
+        try:
+            picture = await asyncio.wait_for(
+                download_telegram_image(
+                    client, message, chat_id=str(chat_id), message_id=str(message.id)
+                ),
+                timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning("inbox_image_timeout", chat=str(title)[:40], message_id=str(message.id))
+        except Exception as exc:
+            log.warning("inbox_image_fail", error=str(exc)[:120])
     row = await save_channel_post(
         channel="telegram",
         chat_id=str(chat_id),
@@ -134,7 +169,7 @@ async def _ingest(settings: Settings, message, chat, client=None, *, live: bool 
     if row:
         _note("saved", chat=str(title)[:48], marketplace=row.marketplace)
         if live:
-            await _publish_live(row, settings)
+            await _enqueue_publish(row, settings)
         return True
     return False
 
@@ -152,6 +187,13 @@ async def _publish_live(row, settings: Settings) -> None:
             await session.commit()
         if status == "published":
             log.info("inbox_republished", product=row.product_name[:80], marketplace=row.marketplace)
+        else:
+            log.info(
+                "inbox_publish_status",
+                status=status,
+                product=(row.product_name or "")[:80],
+                marketplace=row.marketplace,
+            )
     except Exception as exc:
         log.warning("inbox_publish_skip", error=str(exc)[:160])
 
@@ -217,6 +259,9 @@ async def _poll_heads(
     max_chats: int = 40,
     live: bool = False,
 ) -> int:
+    import time
+
+    started = time.monotonic()
     saved = 0
     chats = 0
     try:
@@ -239,19 +284,22 @@ async def _poll_heads(
     except Exception as exc:
         log.warning("telegram_inbox_poll_fail", error=str(exc)[:160])
         raise
-    if saved:
-        _note("poll", chats=chats, saved=saved)
+    elapsed = time.monotonic() - started
+    if saved or elapsed >= 20:
+        _note("poll", chats=chats, saved=saved, seconds=round(elapsed, 1))
     return saved
 
 
 async def _watchdog(client, settings: Settings) -> None:
     fails = 0
     while True:
-        await asyncio.sleep(25)
+        # Ciclo curto: o poll não deve mais esperar a publicação terminar.
+        await asyncio.sleep(8)
         if not client.is_connected():
             return
         try:
-            await _poll_heads(client, settings)
+            # live=True: mensagens pegadas no poll (quando o event falha) também publicam.
+            await _poll_heads(client, settings, live=True)
             fails = 0
         except asyncio.CancelledError:
             raise
@@ -294,13 +342,14 @@ async def _listen(settings: Settings, TelegramClient, events) -> None:
         from app.publishing.outbox import pump
 
         asyncio.create_task(pump(client))
+        asyncio.create_task(_publish_worker())
         asyncio.create_task(_boot_extras(settings, events, extras))
         tasks = [
             asyncio.create_task(_backfill(client, settings)),
             asyncio.create_task(_watchdog(client, settings)),
         ]
         try:
-            saved = await asyncio.wait_for(_poll_heads(client, settings, live=False), 90)
+            saved = await asyncio.wait_for(_poll_heads(client, settings, live=True), 90)
             _note("catchup", saved=saved)
         except Exception as exc:
             _note("catchup_fail", error=str(exc)[:160])

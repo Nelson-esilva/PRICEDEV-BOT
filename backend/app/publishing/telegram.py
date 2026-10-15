@@ -100,7 +100,10 @@ def _compact_ml_url(url: str, settings: Settings) -> str:
     if native:
         code = native.upper().replace("-", "")
         path = (parsed.path or "").lower()
-        if "/p/" in path or code.startswith("MLBU"):
+        # MLBU é página /up/… — /p/MLBU… dá 404 no navegador desktop.
+        if code.startswith("MLBU") or "/up/" in path:
+            return urlunparse(("https", "www.mercadolivre.com.br", f"/up/{code}", "", query, ""))
+        if "/p/" in path:
             return urlunparse(("https", "www.mercadolivre.com.br", f"/p/{code}", "", query, ""))
         dashed = f"MLB-{code[3:]}" if code.startswith("MLB") else code
         return urlunparse(("https", "produto.mercadolivre.com.br", f"/{dashed}", "", query, ""))
@@ -138,6 +141,49 @@ def _catalog_cover(opp, url: str | None) -> str | None:
         text=str(getattr(opp, "product_name", "") or ""),
         urls=[url] if url else None,
     )
+
+
+async def _resolve_publish_photo(opp, link: str | None) -> str | None:
+    """Só devolve URL/path se a imagem for JPEG/PNG utilizável."""
+    from app.inbox.media import resolve_amazon_image, resolve_catalog_image
+    from app.ingestion.identity import parse_product_url
+    from app.publishing.outbox import _photo_jpeg
+
+    candidates: list[str] = []
+    primary = deal_photo(getattr(opp, "image_url", None))
+    if primary:
+        candidates.append(primary)
+    cover = deal_photo(_catalog_cover(opp, link))
+    if cover and cover not in candidates:
+        candidates.append(cover)
+
+    market = str(getattr(opp, "marketplace", "") or "").strip().lower()
+    native = str(getattr(opp, "native_product_id", "") or "").strip()
+    if not native and link:
+        parsed_market, parsed_native = parse_product_url(link)
+        native = parsed_native or ""
+        market = (parsed_market or market).lower()
+    if market == "amazon" and native:
+        amazon = await resolve_amazon_image(native)
+        if amazon:
+            photo = deal_photo(amazon)
+            if photo and photo not in candidates:
+                candidates.append(photo)
+    elif market == "mercadolivre" and native and not candidates:
+        ml = await resolve_catalog_image(
+            marketplace=market,
+            native_id=native,
+            text=str(getattr(opp, "product_name", "") or ""),
+            urls=[link] if link else None,
+        )
+        photo = deal_photo(ml)
+        if photo:
+            candidates.append(photo)
+
+    for candidate in candidates:
+        if await _photo_jpeg(candidate) is not None:
+            return candidate
+    return None
 
 
 def deal_photo(url: str | None) -> str | None:
@@ -669,12 +715,12 @@ async def publish_opportunity(session, opp: Opportunity, settings: Settings, *, 
     since = _telegram_dedup_since(settings)
     if await _already_published(session, keys, opp, since=since):
         return "duplicate"
+    photo = await _resolve_publish_photo(opp, link)
+    if not photo:
+        return "no_image"
     body = format_message(opp, settings)
     if not await _claim_publication(keys, str(opp.id), body, since=since):
         return "duplicate"
-    photo = deal_photo(getattr(opp, "image_url", None)) or deal_photo(
-        _catalog_cover(opp, link)
-    )
     sent = await _deliver(
         settings,
         body,
@@ -736,16 +782,24 @@ async def publish_inbox(session, row, settings: Settings) -> str:
         return "not_affiliate"
     from app.inbox.media import resolve_catalog_image
 
+    if not row.image_url and row.chat_id and row.message_id:
+        from app.inbox.media import media_path, public_media_url
+
+        stem = re.sub(r"[^A-Za-z0-9_-]", "_", f"{row.chat_id}_{row.message_id}")[:80]
+        for name in (f"{stem}.jpg", f"{stem}.jpeg", f"{stem}.png", f"{stem}.webp"):
+            if media_path(name):
+                row.image_url = public_media_url(name)
+                break
     catalog = await resolve_catalog_image(
         marketplace=row.marketplace,
         native_id=row.native_product_id,
         text=row.body,
         urls=[raw] if raw else None,
     )
-    if catalog and (
-        not row.image_url
-        or str(row.image_url).startswith("/api/v1/inbox/media/")
-    ):
+    local = bool(row.image_url and str(row.image_url).startswith("/api/v1/inbox/media/"))
+    market = (row.marketplace or "").strip().lower()
+    # Amazon P/…LZZZZZZZ.jpg costuma ser GIF vazio — não sobrescrever foto do Telegram.
+    if catalog and (not row.image_url or (local and market == "mercadolivre")):
         row.image_url = catalog
     publish_keys = inbox_publish_keys(row)
     if not publish_keys:
@@ -863,42 +917,31 @@ async def _send_bot(
     close = http is None
     markup = _inline_keyboard(button_url, button_label)
     try:
-        if photo:
-            photo_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto"
-            payload = {"chat_id": chat, "caption": body, "parse_mode": "HTML"}
-            if markup:
-                payload["reply_markup"] = markup
-            if photo.startswith("http"):
-                resp = await client.post(photo_url, json={**payload, "photo": photo})
-            else:
-                with open(photo, "rb") as handle:
-                    data = {k: v for k, v in payload.items() if k != "reply_markup"}
-                    if markup:
-                        import json
-
-                        data["reply_markup"] = json.dumps(markup)
-                    resp = await client.post(
-                        photo_url,
-                        data=data,
-                        files={"photo": handle},
-                    )
-            if resp.status_code < 400:
-                return True
-            log.warning("telegram_bot_photo_skip", status=resp.status_code, body=resp.text[:160])
-        url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-        payload = {
-            "chat_id": chat,
-            "text": body,
-            "disable_web_page_preview": True,
-            "parse_mode": "HTML",
-        }
+        if not photo:
+            log.warning("telegram_bot_skip_no_photo", chat=chat)
+            return False
+        photo_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto"
+        payload = {"chat_id": chat, "caption": body, "parse_mode": "HTML"}
         if markup:
             payload["reply_markup"] = markup
-        resp = await client.post(url, json=payload)
-        if resp.status_code >= 400:
-            log.warning("telegram_bot_http", status=resp.status_code, body=resp.text[:160])
-            return False
-        return True
+        if photo.startswith("http"):
+            resp = await client.post(photo_url, json={**payload, "photo": photo})
+        else:
+            with open(photo, "rb") as handle:
+                data = {k: v for k, v in payload.items() if k != "reply_markup"}
+                if markup:
+                    import json
+
+                    data["reply_markup"] = json.dumps(markup)
+                resp = await client.post(
+                    photo_url,
+                    data=data,
+                    files={"photo": handle},
+                )
+        if resp.status_code < 400:
+            return True
+        log.warning("telegram_bot_photo_skip", status=resp.status_code, body=resp.text[:160])
+        return False
     except Exception as exc:
         log.warning("telegram_bot_fail", error=str(exc)[:200])
         return False

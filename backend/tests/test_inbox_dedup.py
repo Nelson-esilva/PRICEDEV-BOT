@@ -98,6 +98,10 @@ def test_inbox_publish_key_ignores_group_and_caption():
 
 async def test_second_group_does_not_republish(db, monkeypatch):
     monkeypatch.setattr("app.publishing.telegram._deliver", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.publishing.telegram._resolve_publish_photo",
+        AsyncMock(return_value="https://http2.mlstatic.com/D_NQ_NP_123-O.jpg"),
+    )
     settings = _publish_settings()
     first = _row()
     second = _row(chat_id="2", chat_title="Grupo B", message_id="11", product_name="Mesmo fone")
@@ -113,6 +117,10 @@ async def test_second_group_does_not_republish(db, monkeypatch):
 
 async def test_republish_allowed_after_dedup_window(db, monkeypatch):
     monkeypatch.setattr("app.publishing.telegram._deliver", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.publishing.telegram._resolve_publish_photo",
+        AsyncMock(return_value="https://http2.mlstatic.com/D_NQ_NP_123-O.jpg"),
+    )
     settings = _publish_settings()
     settings.telegram_dedup_hours = 3
     first = _row()
@@ -144,6 +152,27 @@ async def test_skips_coupon_mechan_without_product(db, monkeypatch):
         purchase_url="https://heylink.me/customer9725",
         marketplace="afiliado",
         native_product_id="",
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    assert await publish_inbox(db, row, settings) == "coupon_mechan"
+
+
+async def test_skips_meli_coupon_banner_with_mlbu(db, monkeypatch):
+    monkeypatch.setattr("app.publishing.telegram._deliver", AsyncMock(return_value=True))
+    settings = _publish_settings()
+    row = _row(
+        product_name="30% OFF a partir de R$ 1, Limite de R$ 10000: 3PROMOMELI30",
+        body=(
+            "💸 Cupom Mercado Livre\n"
+            "🏷️ 30% OFF a partir de R$ 1, Limite de R$ 10000: 3PROMOMELI30\n"
+            "https://meli.la/2hbd5fB\n"
+            "Entre nos links do canal\n"
+        ),
+        purchase_url="https://www.mercadolivre.com.br/p/MLBU4828725477",
+        marketplace="mercadolivre",
+        native_product_id="MLBU4828725477",
     )
     db.add(row)
     await db.commit()
