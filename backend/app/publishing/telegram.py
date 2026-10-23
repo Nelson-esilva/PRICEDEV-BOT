@@ -5,6 +5,7 @@ from decimal import Decimal
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from app.affiliates.resolver import stamp_owned_link
+from app.affiliates.awin import AWIN_HOSTS, awin_ready, ensure_owned_kabum, is_owned_kabum, kabum_destination
 from app.core.config import Settings
 from app.core.logging import get_logger
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +38,12 @@ _PHOTO_EXT = re.compile(r"\.(?:jpe?g|png|webp)(?:\?|$)", re.I)
 def compact_affiliate_url(url: str | None, settings: Settings) -> str | None:
     from app.core.urls import is_ml_social_url
 
+    if is_owned_kabum(url, settings):
+        return url
+    if kabum_destination(url):
+        return url if is_owned_kabum(url, settings) else None
+    if (urlparse(url or "").hostname or "").lower() in AWIN_HOSTS:
+        return None
     owned = owned_purchase_url(url, settings) or url
     if not owned or is_ml_social_url(owned):
         return None
@@ -76,6 +83,8 @@ async def ensure_publish_url(
     """Garante afiliado próprio. Shopee passa pela API; ML/Amazon carimbam local."""
     from app.affiliates.resolver import ensure_owned_shopee, is_shopee_url
 
+    if kabum_destination(url) or kabum_destination(existing):
+        return await ensure_owned_kabum(url, settings, existing=existing, http=http)
     sync = compact_affiliate_url(url, settings)
     if sync:
         return sync
@@ -262,6 +271,7 @@ _SLUG_STORE = {
 
 
 def _store_key_from_host(url: str | None) -> str | None:
+    url = kabum_destination(url) or url
     host = (urlparse(url or "").hostname or "").lower()
     if not host:
         return None
@@ -424,6 +434,7 @@ def button_label(store: str | None, url: str = "") -> str:
 
 
 def store_label(store: str | None, url: str = "") -> str | None:
+    url = kabum_destination(url) or url
     from app.ingestion.identity import known_marketplace, parse_product_url
 
     raw = (store or "").strip()
@@ -543,6 +554,8 @@ def should_publish(opp: Opportunity, settings: Settings) -> tuple[bool, str | No
     if getattr(opp, "classification", "") == Classification.REJECTED.value:
         return False, "rejected"
     if compact_affiliate_url(raw, settings) is not None:
+        return True, None
+    if kabum_destination(raw) and awin_ready(settings):
         return True, None
     # Shopee cru / de terceiro: ainda pode virar nosso link na hora do publish.
     if is_shopee_url(raw) and settings.enable_shopee and settings.shopee_app_id:
@@ -778,6 +791,7 @@ async def publish_inbox(session, row, settings: Settings) -> str:
     stamped = compact_affiliate_url(raw, settings)
     if stamped is None and not (
         is_shopee_url(raw) or is_shopee_url(row.affiliate_url)
+        or (kabum_destination(raw) and awin_ready(settings))
     ):
         return "not_affiliate"
     from app.inbox.media import resolve_catalog_image

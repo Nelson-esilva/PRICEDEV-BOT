@@ -16,7 +16,9 @@ from tests.conftest import make_offer
 
 async def test_catalog_publishes_official_sources_only(client, test_settings: Settings):
     factory = get_session_factory()
-    now = datetime(2026, 10, 8, 12, tzinfo=UTC)
+    from app.core.db import utcnow
+    now = utcnow()
+    test_settings.shopee_app_id = "123"
     async with factory() as session:
         await ingest_offers(
             session,
@@ -29,8 +31,9 @@ async def test_catalog_publishes_official_sources_only(client, test_settings: Se
                     source_record_id="s1",
                     native_product_id="sp-fone",
                     product_name="Fone bluetooth Shopee",
+                    announced_discount_pct=Decimal("20"),
                     purchase_url="https://shopee.com.br/product/111",
-                    affiliate_url="https://shopee.com.br/product/111?affiliate=1",
+                    affiliate_url="https://shopee.com.br/product/111?mmp_pid=an_123",
                 ),
                 make_offer(
                     now=now,
@@ -40,6 +43,7 @@ async def test_catalog_publishes_official_sources_only(client, test_settings: Se
                     source_record_id="m1",
                     native_product_id="MLB123456789",
                     product_name="Air fryer Mercado Livre",
+                    announced_discount_pct=Decimal("20"),
                     purchase_url="https://www.mercadolivre.com.br/air-fryer/p/MLB123456789",
                     affiliate_url="https://www.mercadolivre.com.br/air-fryer/p/MLB123456789?matt_word=x",
                 ),
@@ -81,7 +85,9 @@ async def test_catalog_publishes_official_sources_only(client, test_settings: Se
 
 async def test_go_redirects_and_expired_page(client, test_settings: Settings):
     factory = get_session_factory()
-    now = datetime(2026, 10, 8, 15, tzinfo=UTC)
+    from app.core.db import utcnow
+    now = utcnow()
+    test_settings.shopee_app_id = "123"
     async with factory() as session:
         await ingest_offers(
             session,
@@ -94,8 +100,9 @@ async def test_go_redirects_and_expired_page(client, test_settings: Settings):
                     source_record_id="go1",
                     native_product_id="sp-go",
                     product_name="Monitor gamer Shopee",
+                    announced_discount_pct=Decimal("20"),
                     purchase_url="https://shopee.com.br/product/222",
-                    affiliate_url="https://shopee.com.br/product/222?affiliate=1",
+                    affiliate_url="https://shopee.com.br/product/222?mmp_pid=an_123",
                 )
             ],
             test_settings,
@@ -152,3 +159,15 @@ async def test_ops_token_protects_v1_not_public(tmp_path, monkeypatch):
         assert health.status_code == 200
     get_settings.cache_clear()
     reset_engine()
+
+
+def test_list_price_reconstructed_from_store_discount():
+    from app.models.entities import Opportunity
+    from app.storefront.catalog import list_price_of
+
+    store = Opportunity(current_price=Decimal("60.00"), announced_discount_pct=Decimal("40"), classification="ANNOUNCED")
+    assert list_price_of(store) == Decimal("100.00")
+    extreme = Opportunity(current_price=Decimal("5.00"), announced_discount_pct=Decimal("95"), classification="ANNOUNCED")
+    assert list_price_of(extreme) is None
+    historical = Opportunity(current_price=Decimal("80.00"), historical_discount_pct=Decimal("20"), historical_median=Decimal("100.00"), classification="HISTORICALLY_VALIDATED")
+    assert list_price_of(historical) == Decimal("100.00")

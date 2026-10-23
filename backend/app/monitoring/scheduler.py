@@ -13,6 +13,7 @@ from app.monitoring.quarantine import trip as trip_quarantine
 from app.monitoring.retention import run_retention
 from app.publishing.telegram import publish_opportunity
 from app.storefront.catalog import PUBLIC_SOURCES, publish_public_catalog
+from app.storefront.promotions import run_promotions
 from app.sources.base import SourceAuthError, SourceBlocked, SourceConnector, SourceError
 from app.sources.registry import build_connectors
 
@@ -77,6 +78,7 @@ async def poll_source(connector: SourceConnector, settings: Settings) -> None:
                     if status == "published":
                         posted += 1
             await session.commit()
+        await connector.on_ingested()
         if connector.name in PUBLIC_SOURCES:
             try:
                 await publish_public_catalog(settings)
@@ -127,6 +129,7 @@ async def run_scheduler(settings: Settings | None = None) -> None:
     log.info("scheduler_start", sources=[c.name for c in connectors])
     last_retention = None
     last_catalog = None
+    promotions_task = asyncio.create_task(run_promotions(settings))
     try:
         while True:
             now = utcnow()
@@ -153,5 +156,10 @@ async def run_scheduler(settings: Settings | None = None) -> None:
                 await asyncio.sleep(0)
             await asyncio.sleep(1)
     finally:
+        promotions_task.cancel()
+        try:
+            await promotions_task
+        except asyncio.CancelledError:
+            pass
         for connector in connectors:
             await connector.close()

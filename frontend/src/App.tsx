@@ -14,16 +14,14 @@ const STORES = [
 ] as const;
 
 const SOURCES: Record<string, { label: string; hint: string; tone: "community" | "official" | "affiliate" }> = {
-  pelando: { label: "Pelando", hint: "Comunidade", tone: "community" },
   mercadolivre: { label: "Mercado Livre", hint: "Loja oficial", tone: "official" },
   magalu: { label: "Magalu", hint: "Loja oficial", tone: "official" },
-  kabum: { label: "KaBuM!", hint: "Loja oficial", tone: "official" },
   shopee: { label: "Shopee", hint: "Afiliados", tone: "affiliate" },
   lomadee: { label: "Lomadee", hint: "Afiliados", tone: "affiliate" },
   watchlist: { label: "Comparar", hint: "Link colado", tone: "official" },
 };
 
-const SOURCE_ORDER = ["pelando", "mercadolivre", "kabum", "magalu", "shopee", "lomadee", "watchlist"];
+const SOURCE_ORDER = ["mercadolivre", "magalu", "shopee", "lomadee", "watchlist"];
 
 const CATEGORIES = [
   { id: "", label: "Tudo" },

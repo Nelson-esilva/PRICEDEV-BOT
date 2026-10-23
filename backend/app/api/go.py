@@ -9,7 +9,9 @@ from app.affiliates.resolver import stamp_owned_link
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, utcnow
 from app.core.logging import get_logger
-from app.models.entities import DealClick, PublishedDeal
+from app.models.entities import DealClick, PublishedDeal, PublicPromotion
+from app.api.public import live_promotions
+from app.storefront.promotions import owned_campaign_link
 from app.storefront.catalog import STORE_LABELS
 
 router = APIRouter()
@@ -43,9 +45,24 @@ _EXPIRED_HTML = """<!doctype html>
 
 
 def _expired(request: Request) -> HTMLResponse:
-    origin = request.headers.get("origin") or ""
-    home = "/" if not origin else origin.rstrip("/") + "/"
-    return HTMLResponse(_EXPIRED_HTML.format(home=home), status_code=410)
+    return HTMLResponse(_EXPIRED_HTML.format(home="/"), status_code=410)
+
+
+@router.get("/go/promotions/{token}")
+async def go_to_promotion(token: str, request: Request,
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    row = (await session.execute(select(PublicPromotion).where(
+        *live_promotions(utcnow()), PublicPromotion.slug == token))).scalar_one_or_none()
+    if row is None or not owned_campaign_link(row.destination_url, row.store, settings):
+        return _expired(request)
+    session.add(DealClick(deal_id=row.id, slug=row.slug, store=row.store,
+        user_agent=(request.headers.get('user-agent') or '')[:256] or None,
+        referer=(request.headers.get('referer') or '')[:512] or None))
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+    return RedirectResponse(row.destination_url, status_code=302)
 
 
 @router.get("/go/{token}")

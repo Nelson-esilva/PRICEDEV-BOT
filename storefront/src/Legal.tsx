@@ -1,32 +1,5 @@
-import { Link } from "react-router-dom";
-
-export default function Legal({ kind }: { kind: "privacidade" | "termos" }) {
-  if (kind === "privacidade") {
-    return (
-      <main className="legal">
-        <h1>Privacidade</h1>
-        <p>
-          A vitrine pública não cria conta e não guarda mensagens de grupos. Quando você clica em
-          comprar, registramos só o horário, a oferta e o navegador, para medir o clique do afiliado.
-        </p>
-        <p>Não vendemos esses dados. Dúvidas: use o canal PromoDev.</p>
-        <Link to="/">Voltar</Link>
-      </main>
-    );
-  }
-  return (
-    <main className="legal">
-      <h1>Termos e divulgação</h1>
-      <p>
-        O PromoDev é um site de divulgação de ofertas. Alguns links são de programas de afiliados
-        (Shopee, Mercado Livre e outros). Se você comprar por eles, podemos receber comissão, sem
-        custo extra para você.
-      </p>
-      <p>
-        Não vendemos os produtos. Preço, estoque, frete e garantia são da loja. Confira tudo no
-        checkout antes de pagar.
-      </p>
-      <Link to="/">Voltar</Link>
-    </main>
-  );
+import { useTitle } from './ui';
+export default function Legal({ kind }: { kind: 'privacidade' | 'termos' }) {
+  const privacy = kind === 'privacidade'; useTitle(privacy ? 'Privacidade' : 'Termos de uso');
+  return <article className="container page-space legal-page"><h1>{privacy ? 'Privacidade' : 'Termos de uso'}</h1>{privacy ? <><p>O PromoDev pode ser usado sem cadastro. Os favoritos são guardados no armazenamento local do seu navegador, neste dispositivo. Eles não são sincronizados com outros dispositivos. Você pode removê-los pelos cartões ou apagando os dados do site no navegador.</p><h2>Links e registros de acesso</h2><p>Ao abrir uma oferta, campanha ou cupom, o servidor pode registrar data do clique, loja, oferta, identificação do navegador e página de origem. Esses registros ajudam a acompanhar o funcionamento dos redirecionamentos. Os registros de cliques seguem a retenção configurada no serviço, por padrão 90 dias.</p><h2>Serviços de terceiros</h2><p>Imagens de produtos e fontes podem ser carregadas de serviços externos. Ao ir para uma loja, passam a valer os termos e a política de privacidade dessa loja e de sua rede de afiliados, que podem usar cookies para atribuir a compra.</p><h2>Compartilhamento e favoritos</h2><p>O compartilhamento ocorre somente quando você escolhe essa ação. Copiar cupons e links utiliza a área de transferência do dispositivo quando permitido pelo navegador. O site não pede dados de pagamento.</p></> : <><p>O PromoDev reúne ofertas, campanhas e cupons de lojas parceiras. A compra é concluída no site de origem. Não vendemos produtos, não processamos pagamentos e não realizamos entregas.</p><h2>Preços e condições</h2><p>Preços, estoque, frete e regras podem mudar. O valor final é o apresentado pela loja. Cupons podem exigir compra mínima, produtos específicos, elegibilidade ou forma de pagamento. Uma campanha não implica desconto em todos os produtos da loja.</p><h2>Referências de desconto</h2><p>Percentuais anunciados pela loja são identificados como tal. Descontos históricos se referem à comparação com observações anteriores do nosso sistema e não garantem o menor preço de todo o mercado. Quando disponível, o preço de referência é identificado na oferta.</p><h2>Links de afiliados</h2><p>Podemos receber comissão por compras realizadas pelos nossos links, sem custo extra para você. O recebimento depende das regras de atribuição de cada programa. Comissão de afiliado não é apresentada como desconto para o comprador.</p><h2>Ofertas salvas</h2><p>Salvar uma oferta não reserva produto, preço nem estoque. Favoritos encerrados são sinalizados e deixam de oferecer acesso direto de compra.</p></>}</article>;
 }

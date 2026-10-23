@@ -12,6 +12,7 @@ from app.core.db import get_session
 from app.core.search import any_contains, category_match, reason_match, store_match
 from app.models.entities import Opportunity
 from app.schemas.api import OpportunityListOut, OpportunityOut
+from app.sources.registry import RETIRED_SOURCES
 
 router = APIRouter()
 
@@ -36,8 +37,11 @@ async def list_opportunities(
     limit: int = Query(default=50, ge=1, le=400),
     offset: int = Query(default=0, ge=0),
 ) -> OpportunityListOut:
-    stmt: Select = select(Opportunity)
-    count_stmt = select(func.count()).select_from(Opportunity)
+    # Mantém os registros para histórico, mas retira as origens descontinuadas
+    # antes da contagem/paginação, inclusive em consultas com source explícito.
+    visible = Opportunity.source.notin_(tuple(RETIRED_SOURCES))
+    stmt: Select = select(Opportunity).where(visible)
+    count_stmt = select(func.count()).select_from(Opportunity).where(visible)
     if source:
         wanted = [item.strip() for item in source.split(",") if item.strip()]
         if len(wanted) == 1:

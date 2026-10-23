@@ -118,6 +118,15 @@ async def init_db() -> None:
 
 def _add_missing_columns(connection) -> None:
     inspector = inspect(connection)
+    if "published_deals" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("published_deals")}
+        for name, ddl in {
+            "discount_pct": "NUMERIC(8,2)",
+            "discount_basis": "VARCHAR(32)",
+            "acceptance_score": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE published_deals ADD COLUMN {name} {ddl}"))
     if "opportunities" not in inspector.get_table_names():
         return
     existing = {col["name"] for col in inspector.get_columns("opportunities")}

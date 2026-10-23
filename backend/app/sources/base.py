@@ -39,3 +39,7 @@ class SourceConnector(ABC):
 
     async def close(self) -> None:
         return None
+
+    async def on_ingested(self) -> None:
+        """Confirma progresso do conector somente após persistir a ingestão."""
+        return None

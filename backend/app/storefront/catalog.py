@@ -13,6 +13,7 @@ from app.core.db import get_session_factory, utcnow
 from app.core.logging import get_logger
 from app.core.search import CATEGORY_KEYS
 from app.models.entities import Opportunity, PublishedDeal
+from app.storefront.taxonomy import category_of
 
 log = get_logger("storefront")
 
@@ -25,6 +26,7 @@ STORE_BY_SOURCE = {
 STORE_LABELS = {
     "shopee": "Shopee",
     "mercadolivre": "Mercado Livre",
+    "kabum": "KaBuM!",
 }
 
 
@@ -41,16 +43,26 @@ def store_of(opportunity: Opportunity) -> str:
 
 
 def infer_category(product_name: str, declared: str | None) -> str | None:
-    if declared and declared in CATEGORY_KEYS:
-        return declared
-    haystack = (product_name or "").lower()
-    for key, needles in CATEGORY_KEYS.items():
-        if any(needle in haystack for needle in needles):
-            return key
-    return declared or None
+    return category_of(product_name, declared)
+
+
+def discount_of(opportunity: Opportunity) -> tuple[Decimal | None, str | None]:
+    if opportunity.classification in {"HISTORICALLY_VALIDATED", "PRICE_ANOMALY_CANDIDATE"}:
+        if opportunity.historical_discount_pct and opportunity.historical_discount_pct > 0:
+            return opportunity.historical_discount_pct, "historical"
+    if opportunity.announced_discount_pct and 5 <= opportunity.announced_discount_pct < 100:
+        return opportunity.announced_discount_pct, "store"
+    return None, None
 
 
 def list_price_of(opportunity: Opportunity) -> Decimal | None:
+    pct, basis = discount_of(opportunity)
+    if basis == "store":
+        # Mesma reconstrução do Telegram: preço anterior implícito no percentual da loja.
+        if pct is None or pct >= 90:
+            return None
+        reconstructed = (opportunity.current_price / (Decimal("1") - pct / Decimal("100"))).quantize(Decimal("0.01"))
+        return reconstructed if reconstructed > opportunity.current_price else None
     median = opportunity.historical_median
     if median is not None and median > opportunity.current_price:
         return median
@@ -75,6 +87,10 @@ def qualifies(opportunity: Opportunity, settings: Settings) -> bool:
         return False
     if opportunity.status != "active":
         return False
+    if opportunity.classification in {"REJECTED", "EXPIRED"}:
+        return False
+    if discount_of(opportunity)[0] is None and not (opportunity.coupon_code or "").strip():
+        return False
     if opportunity.affiliate_status not in AFFILIATE_OK:
         return False
     if opportunity.acceptance_score < settings.storefront_min_score:
@@ -92,17 +108,21 @@ def _apply_snapshot(deal: PublishedDeal, opportunity: Opportunity, *, now: datet
     deal.image_url = opportunity.image_url
     deal.description = opportunity.description
     deal.coupon_code = opportunity.coupon_code
-    deal.payment_hint = opportunity.payment_hint
+    hint = opportunity.payment_hint
+    deal.payment_hint = None if hint and re.search(r"ganhos|comiss|commission|earning", hint, re.I) else hint
     deal.current_price = opportunity.current_price
     deal.list_price = list_price_of(opportunity)
     deal.announced_discount_pct = opportunity.announced_discount_pct
+    deal.discount_pct, deal.discount_basis = discount_of(opportunity)
+    deal.acceptance_score = opportunity.acceptance_score
     deal.currency = opportunity.currency
     deal.affiliate_network = opportunity.affiliate_network or deal.store
     deal.destination_url = destination_of(opportunity) or deal.destination_url
     deal.status = "active"
-    deal.updated_at = now
-    deal.last_seen_at = now
-    deal.expires_at = now + ttl
+    observed = opportunity.fetched_at or opportunity.analyzed_at or opportunity.updated_at or now
+    deal.updated_at = observed
+    deal.last_seen_at = observed
+    deal.expires_at = observed + ttl
     deal.expired_at = None
 
 
@@ -121,7 +141,8 @@ async def sync_catalog(session: AsyncSession, settings: Settings, *, now: dateti
         .scalars()
         .all()
     )
-    eligible = [item for item in opportunities if qualifies(item, settings)]
+    eligible = [item for item in opportunities if qualifies(item, settings)
+                and (item.fetched_at or item.analyzed_at or item.updated_at or moment) + ttl > moment]
     eligible_ids = {item.id for item in eligible}
     existing = (
         (

@@ -22,12 +22,14 @@ class PublicDealOut(BaseModel):
     current_price: Decimal
     list_price: Decimal | None
     announced_discount_pct: Decimal | None
+    discount_pct: Decimal | None = None
+    discount_basis: str | None = None
     currency: str
     go_path: str = ""
     updated_at: datetime
     expires_at: datetime
 
-    @field_serializer("current_price", "list_price", "announced_discount_pct")
+    @field_serializer("current_price", "list_price", "announced_discount_pct", "discount_pct")
     def serialize_decimal(self, value: Decimal | None) -> float | None:
         return float(value) if value is not None else None
 

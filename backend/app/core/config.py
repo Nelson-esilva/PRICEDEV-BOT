@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     enable_shopee: bool = False
     enable_mercadolivre: bool = True
     enable_magalu: bool = True
-    enable_kabum: bool = True
+    enable_kabum: bool = False
     enable_lomadee: bool = False
     enable_price_confirm: bool = True
     enable_watchlist: bool = True
@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     ml_affiliate_matt_tool: str = ""
     ml_affiliate_cookie: str = ""
     amazon_affiliate_tag: str = ""
+    enable_awin: bool = False
+    awin_publisher_id: str = ""
+    awin_api_token: str = ""
+    awin_kabum_advertiser_id: str = ""
+    awin_kabum_feed_url: str = ""
+    awin_kabum_feed_poll_seconds: int = 60
+    awin_kabum_feed_check_seconds: int = 900
+    awin_kabum_feed_batch: int = 250
     ml_hub_poll_seconds: int = 120
     ml_hub_max_items: int = 1200
     ml_hub_pages_per_query: int = 8

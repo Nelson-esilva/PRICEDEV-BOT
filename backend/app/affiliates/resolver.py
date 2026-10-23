@@ -5,6 +5,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 
+from app.affiliates.awin import ensure_owned_kabum, kabum_destination
+
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.urls import is_ml_social_url, sanitize_purchase_url
@@ -203,6 +205,16 @@ async def resolve_links(
 ) -> AffiliateResolution:
     original = sanitize_purchase_url(original_url)
     affiliate = sanitize_purchase_url(existing_affiliate)
+    if kabum_destination(original) or kabum_destination(affiliate):
+        owned = await ensure_owned_kabum(original, settings, existing=affiliate, http=http)
+        return AffiliateResolution(
+            original=original_url,
+            validated=kabum_destination(original) or kabum_destination(affiliate),
+            affiliate=owned,
+            final=owned,
+            network="awin",
+            status="converted" if owned else "unpublishable",
+        )
     if original and _host(original) in AMAZON_SHORT_HOSTS:
         followed = await _follow(original, http)
         if followed:

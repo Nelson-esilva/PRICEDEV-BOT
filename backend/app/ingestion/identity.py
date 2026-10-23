@@ -20,6 +20,9 @@ _CANONICAL = {"mercadolivre", "amazon", "shopee", "magalu", "kabum"}
 def known_marketplace(url: str | None) -> str | None:
     if not url:
         return None
+    from app.affiliates.awin import kabum_destination
+
+    url = kabum_destination(url) or url
     host = (urlparse(url).hostname or "").lower()
     if "shopee.com" in host:
         return "shopee"
@@ -43,6 +46,9 @@ def infer_marketplace(url: str | None, fallback: str) -> str:
 def parse_product_url(url: str | None) -> tuple[str | None, str | None]:
     if not url:
         return None, None
+    from app.affiliates.awin import kabum_destination
+
+    url = kabum_destination(url) or url
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     path = parsed.path or ""

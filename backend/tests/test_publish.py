@@ -168,9 +168,9 @@ def test_skips_amazon_homepage_without_asin():
     assert compact_affiliate_url("https://www.amazon.com.br/?tag=santanatech-20", _settings()) is None
 
 
-def test_compacts_kabum_tracking():
+def test_kabum_requires_owned_tracking():
     raw = "https://www.kabum.com.br/produto/531155/teclado?gclid=abc&utm_source=x"
-    assert compact_affiliate_url(raw, _settings()) == "https://www.kabum.com.br/produto/531155"
+    assert compact_affiliate_url(raw, _settings()) is None
 
 
 def test_rejects_foreign_or_raw_shopee():

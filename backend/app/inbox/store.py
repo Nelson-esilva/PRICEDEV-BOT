@@ -72,7 +72,7 @@ async def save_channel_post(
     )
     settings = get_settings()
     affiliate = stamp_owned_link(purchase, settings)
-    if affiliate is None and marketplace in {"shopee", "afiliado"}:
+    if affiliate is None and marketplace in {"shopee", "kabum", "afiliado"}:
         links = await resolve_links(original_url=purchase, existing_affiliate=None, settings=settings)
         affiliate = links.affiliate
     coupon_links = extract_coupon_links(text, urls + unveiled, purchase)

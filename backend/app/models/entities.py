@@ -299,6 +299,9 @@ class PublishedDeal(Base):
     current_price: Mapped[Decimal] = mapped_column(Money, nullable=False)
     list_price: Mapped[Decimal | None] = mapped_column(Money)
     announced_discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    discount_basis: Mapped[str | None] = mapped_column(String(32))
+    acceptance_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="BRL", nullable=False)
     affiliate_network: Mapped[str | None] = mapped_column(String(64))
     destination_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -321,3 +324,30 @@ class DealClick(Base):
     user_agent: Mapped[str | None] = mapped_column(String(256))
     referer: Mapped[str | None] = mapped_column(String(512))
     clicked_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+
+
+class PublicPromotion(Base):
+    """Campanha/cupom independente do histórico de preços e da retenção do ops."""
+
+    __tablename__ = "public_promotions"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_public_promotion_external"),
+        Index("ix_promotion_store_kind", "store", "kind", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    slug: Mapped[str] = mapped_column(String(180), unique=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    store: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    terms: Mapped[str | None] = mapped_column(Text)
+    code: Mapped[str | None] = mapped_column(String(128))
+    image_url: Mapped[str | None] = mapped_column(Text)
+    destination_url: Mapped[str] = mapped_column(Text, nullable=False)
+    starts_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)

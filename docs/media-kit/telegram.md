@@ -1,6 +1,6 @@
 # PromoDev — Media kit (só Telegram)
 
-Kit visual e textual do **grupo PromoDev** no Telegram. Não cobre site, ops nem Instagram.
+Identidade oficial PromoDev e orientações do grupo no Telegram. A mesma logo é aplicada à vitrine pública.
 
 ## Identidade
 
@@ -11,38 +11,40 @@ Kit visual e textual do **grupo PromoDev** no Telegram. Não cobre site, ops nem
 | One-liner | Ofertas com link de afiliado, sem enrolação |
 | Público | Quem caça preço no BR (Amazon, ML, Shopee e outras lojas) |
 
+## Logo oficial
+
+Referência aprovada: [logo azul e laranja](assets/4f6c32e6-bd02-4666-b89b-3b5d4917d733.jpeg).
+A etiqueta azul com símbolo de código e o nome PromoDev em azul e laranja são
+a identidade oficial. Preservar proporções, cores e a arte. Os antigos arquivos
+`promodev-telegram-avatar.jpg` e `promodev-telegram-banner.jpg` foram retirados e
+não devem ser usados como referência. A cópia usada pelo site fica em
+`storefront/public/promodev-logo.jpeg`.
+
 ## Cores
 
-Alinhadas à vitrine PromoDev:
+Azul e laranja da marca orientam a identidade. Tokens de interface da vitrine:
 
-| Token | Hex | Uso no Telegram |
-| --- | --- | --- |
-| Laranja | `#F26B21` | Destaque, CTA, avatar |
-| Verde | `#1F7A4D` | Preço bom / “POR” |
-| Tinta | `#171717` | Texto em artes claras |
-| Creme | `#F6F5F2` | Fundo de banner / stories de convite |
-| Branco | `#FFFFFF` | Texto sobre laranja/verde |
+- Azul de ação: `#0757DC`.
+- Azul profundo: `#082956`.
+- Laranja: `#F66A0A`.
+- Texto: `#15243D`.
+- Fundo claro: `#F7F8FB`.
+- Branco: `#FFFFFF`.
 
-Evitar roxo, glow neon e estética “dashboard IA”.
+Estes tokens são complementos para a interface; a arte original não é recolorida.
+Evitar a antiga marca verde, roxo, glow neon e estética de dashboard.
 
-## Tipografia (artes)
+## Tipografia
 
-- Título / marca: sans geométrica forte (ex.: Space Grotesk, Outfit, ou similar)
-- Corpo: sans limpa legível em celular
-- No post automático do bot a tipografia é a do Telegram (HTML: negrito, sublinhado, riscado)
+Manrope para títulos e preços; DM Sans para navegação e texto. No Telegram,
+a tipografia é a do aplicativo.
 
 ## Assets
 
-Pasta: [`assets/`](./assets/)
-
-| Arquivo | Formato | Uso |
-| --- | --- | --- |
-| [`promodev-telegram-avatar.jpg`](./assets/promodev-telegram-avatar.jpg) | 1:1 | Foto do grupo |
-| [`promodev-telegram-banner.jpg`](./assets/promodev-telegram-banner.jpg) | 16:9 | Arte de convite / compartilhar o grupo |
-
-**Telegram — foto do grupo:** JPG/PNG quadrado, marca legível em ~40 px.
-
-**Convite:** usar o banner 16:9 + link `t.me/...` do grupo.
+O JPEG oficial é a fonte de marca disponível. Não há banner oficial aprovado
+nesta pasta. Um novo banner deve derivar da identidade acima e não inventar
+outra logo. A troca da foto de grupo ou publicação de artes exige uma ação
+explícita do administrador; corrigir o media-kit não publica nada no Telegram.
 
 ## Bio sugerida (descrição do grupo)
 
@@ -98,7 +100,7 @@ loja/código
 Regras de link:
 
 - Amazon / ML / Shopee → **só** afiliado próprio
-- KaBuM, Terabyte, AliExpress etc. → link cru ok, sempre visível
+- KaBuM! → conversão para afiliado próprio Awin; preservar o rastreamento
 - Mechan de cupom sem produto → não republicar
 
 ## Dedup no grupo

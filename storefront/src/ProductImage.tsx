@@ -1,5 +1,5 @@
 import { useState } from "react";
-import Icon from "./Icon";
+import { Icon } from "./ui";
 
 export default function ProductImage({
   src,
@@ -19,7 +19,6 @@ export default function ProductImage({
         aria-label={`${name}: imagem indisponível`}
       >
         <Icon name="bag" size={40} />
-        <span>Imagem indisponível</span>
       </div>
     );
   return (

@@ -26,6 +26,8 @@ async def test_opportunities_and_products_after_ingest(client, test_settings: Se
             session,
             [
                 make_offer(
+                    source="watchlist",
+                    purchase_url="https://example.com/product/ssd",
                     now=now - timedelta(days=20),
                     source_record_id="old",
                     effective_price=Decimal("699.00"),
@@ -40,6 +42,8 @@ async def test_opportunities_and_products_after_ingest(client, test_settings: Se
             session,
             [
                 make_offer(
+                    source="watchlist",
+                    purchase_url="https://example.com/product/ssd",
                     now=now,
                     source_record_id="new",
                     effective_price=Decimal("459.00"),
@@ -72,7 +76,8 @@ async def test_opportunities_and_products_after_ingest(client, test_settings: Se
     sources = await client.get("/api/v1/sources")
     assert sources.status_code == 200
     names = {row["source"] for row in sources.json()}
-    assert names >= {"pelando", "shopee"}
+    assert names >= {"watchlist", "shopee"}
+    assert not names & {"pelando", "kabum"}
     assert "mock" not in names
 
 
@@ -90,11 +95,11 @@ async def test_filters(client, test_settings: Settings):
             [
                 make_offer(
                     now=now,
-                    source="pelando",
+                    source="watchlist",
                     price_verified=False,
                     verified_price=None,
                     identity_confidence=IdentityConfidence.LOW,
-                    purchase_url="https://www.kabum.com.br/produto/1",
+                    purchase_url="https://example.com/product/1",
                 )
             ],
             test_settings,
@@ -103,3 +108,29 @@ async def test_filters(client, test_settings: Settings):
     resp = await client.get("/api/v1/opportunities", params={"classification": "PROVISIONAL"})
     assert resp.status_code == 200
     assert all(i["classification"] == "PROVISIONAL" for i in resp.json()["items"])
+
+
+async def test_retired_sources_are_hidden_before_count_and_pagination(client, test_settings):
+    from app.core.db import get_session_factory, utcnow
+
+    now = utcnow()
+    async with get_session_factory()() as session:
+        await ingest_offers(
+            session,
+            [make_offer(
+                source=source,
+                source_record_id=f"{source}-record",
+                native_product_id=f"{source}-product",
+                purchase_url=f"https://example.com/product/{source}",
+                now=now,
+            ) for source in ("pelando", "kabum", "watchlist")],
+            test_settings,
+            now=now,
+        )
+    visible = (await client.get("/api/v1/opportunities", params={"limit": 1})).json()
+    assert visible["total"] == 1
+    assert [item["source"] for item in visible["items"]] == ["watchlist"]
+    for source in ("pelando", "kabum"):
+        hidden = (await client.get("/api/v1/opportunities", params={"source": source})).json()
+        assert hidden == {"items": [], "total": 0}
+    assert len((await client.get("/api/v1/products")).json()) == 3
