@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -308,6 +309,8 @@ class MercadoLivreSource(SourceConnector):
             pic_id = pics[0].get("id")
         image = sanitize_media_url(f"https://http2.mlstatic.com/D_NQ_NP_{pic_id}-O.webp") if pic_id else None
         pix = "pix" in json.dumps(meta.get("tracks") or {}, ensure_ascii=False).lower()
+        rating, sold = card_reviews(card)
+        condition, regular = card_price_condition(card)
         return NormalizedOffer(
             source=self.name,
             source_record_id=native,
@@ -330,10 +333,80 @@ class MercadoLivreSource(SourceConnector):
             image_url=image,
             payment_hint="Pix" if pix else None,
             announced_discount_pct=_discount(price, previous),
+            rating=rating,
+            sales_count=sold,
+            best_seller=card_best_seller(card) or None,
+            price_condition=condition,
+            regular_price=regular if condition and regular and regular > price else None,
+            # Id do produto de catálogo: abre fotos oficiais, ranking e categoria pela API oficial.
+            catalog_product_id=_catalog_id(meta.get("product_id")),
             identity_confidence=IdentityConfidence.HIGH,
             price_verified=True,
             raw_payload={"id": native, "via": via},
         ).quantized()
+
+
+_RATING = re.compile(r"Classifica\w*\s+(\d+(?:[.,]\d+)?)")
+_SOLD = re.compile(r"\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milh\w*)?\s+(?:produtos\s+)?vendidos", re.I)
+
+
+def card_reviews(card: dict[str, Any]) -> tuple[Decimal | None, int | None]:
+    """Nota e vendas do componente review_compacted ("4.7 | +50mil vendidos")."""
+    for component in card.get("components") or []:
+        if not isinstance(component, dict) or component.get("type") != "review_compacted":
+            continue
+        block = component.get("review_compacted") if isinstance(component.get("review_compacted"), dict) else {}
+        text = " ".join([str(block.get("alt_text") or "")] + [
+            str(((value.get("label") or {}) if isinstance(value, dict) else {}).get("text") or "")
+            for value in block.get("values") or []
+        ])
+        rating_match = _RATING.search(text)
+        rating = money(rating_match.group(1).replace(",", ".")) if rating_match else None
+        sold = None
+        sold_match = _SOLD.search(text)
+        if sold_match:
+            number = Decimal(sold_match.group(1).replace(",", "."))
+            unit = (sold_match.group(2) or "").lower()
+            sold = int(number * (1_000_000 if unit.startswith("mi") and unit != "mil" else 1_000 if unit == "mil" else 1))
+        return rating, sold
+    return None, None
+
+
+def _catalog_id(value: Any) -> str | None:
+    text = str(value or "").replace("-", "").upper()
+    return text if text.startswith("MLB") and text[3:].isdigit() else None
+
+
+def card_price_condition(card: dict[str, Any]) -> tuple[str | None, Decimal | None]:
+    """Selo do preço ("28% OFF no Pix", "62% OFF com Cupom") e o valor nos outros meios.
+
+    Quando o selo traz a condição, current_price já é o valor no Pix / com cupom e
+    installments.values[price_total] é o que se paga sem ela ("ou R$ 299 em outros meios").
+    """
+    for component in card.get("components") or []:
+        if not isinstance(component, dict) or component.get("type") != "price":
+            continue
+        block = component.get("price") if isinstance(component.get("price"), dict) else {}
+        label = str(((block.get("discount_label") or {}) if isinstance(block.get("discount_label"), dict) else {}).get("text") or "").lower()
+        condition = "pix" if re.search(r"\bno pix\b", label) else "coupon" if re.search(r"\bcom cupom\b", label) else None
+        if condition is None:
+            return None, None
+        installments = block.get("installments") if isinstance(block.get("installments"), dict) else {}
+        regular = None
+        for value in installments.get("values") or []:
+            if isinstance(value, dict) and value.get("key") == "price_total":
+                regular = money(((value.get("price") or {}) if isinstance(value.get("price"), dict) else {}).get("value"))
+        return condition, regular
+    return None, None
+
+
+def card_best_seller(card: dict[str, Any]) -> bool:
+    for component in card.get("components") or []:
+        if isinstance(component, dict) and component.get("type") == "highlight":
+            text = str(((component.get("highlight") or {}) if isinstance(component.get("highlight"), dict) else {}).get("text") or "")
+            if "mais vendido" in text.lower():
+                return True
+    return False
 
 
 def _decode_ctx(html: str) -> dict[str, Any] | None:
@@ -461,6 +534,12 @@ def _previous_price(card: dict[str, Any]) -> Decimal | None:
 
 def _find_previous(node: Any) -> Decimal | None:
     if isinstance(node, dict):
+        # Polycard atual: {"price": {"previous_price": {"value": 1094}, "current_price": {...}}}
+        prior = node.get("previous_price")
+        if isinstance(prior, dict) and prior.get("value") is not None:
+            parsed = money(prior.get("value"))
+            if parsed:
+                return parsed
         if node.get("previous") and node.get("value") is not None:
             parsed = money(node.get("value"))
             if parsed:

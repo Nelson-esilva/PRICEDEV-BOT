@@ -30,11 +30,12 @@ def _live_filters(stmt, now):
 async def list_public_deals(
     session: AsyncSession = Depends(get_session), q: str | None = None,
     store: str | None = None, category: str | None = None,
-    sort: Literal['featured', 'recent', 'discount', 'price_asc', 'price_desc'] = 'recent',
+    sort: Literal['featured', 'best_selling', 'recent', 'discount', 'price_asc', 'price_desc', 'rank'] = 'recent',
     min_price: Decimal | None = Query(default=None, ge=0),
     max_price: Decimal | None = Query(default=None, ge=0),
     min_discount: Decimal | None = Query(default=None, ge=0, le=100),
     has_coupon: bool = False, ids: str | None = Query(default=None, max_length=4000),
+    trending: bool = False, ranking: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=24, ge=1, le=120), offset: int = Query(default=0, ge=0),
 ) -> PublicDealListOut:
     now = utcnow()
@@ -62,13 +63,22 @@ async def list_public_deals(
         filters.append(discount > 0)
     if has_coupon:
         filters.append(func.length(func.trim(func.coalesce(PublishedDeal.coupon_code, ''))) > 0)
+    if trending:
+        filters.append(PublishedDeal.trending.is_(True))
+    if ranking:
+        filters.append(PublishedDeal.rank_category_id == ranking)
+        filters.append(PublishedDeal.rank_position.is_not(None))
     if ids is not None:
         wanted = [value for value in ids.split(',') if value][:100]
         filters.append(PublishedDeal.id.in_(wanted))
     orders = {
-        'featured': (PublishedDeal.acceptance_score.desc(), PublishedDeal.updated_at.desc()),
+        # Destaques = score de demanda (vendas, nota, desconto, comissão, cliques e pedidos reais).
+        'featured': (PublishedDeal.demand_score.desc(), PublishedDeal.updated_at.desc()),
+        'best_selling': (PublishedDeal.orders_30d.desc(), PublishedDeal.clicks_7d.desc(),
+            func.coalesce(PublishedDeal.sales_count, 0).desc()),
         'recent': (PublishedDeal.updated_at.desc(),), 'discount': (discount.desc(),),
         'price_asc': (PublishedDeal.current_price.asc(),), 'price_desc': (PublishedDeal.current_price.desc(),),
+        'rank': (PublishedDeal.rank_position.asc().nullslast(), PublishedDeal.demand_score.desc()),
     }
     total = (await session.execute(select(func.count()).select_from(PublishedDeal).where(*filters))).scalar_one()
     rows = (await session.execute(select(PublishedDeal).where(*filters)
@@ -141,12 +151,37 @@ async def list_categories(session: AsyncSession = Depends(get_session)):
     return {'items': [{'id': key, 'label': value[0], 'count': counts.get(key, 0)} for key, value in CATEGORIES.items()]}
 
 
+@router.get('/rankings')
+async def list_rankings(session: AsyncSession = Depends(get_session), min_items: int = Query(default=3, ge=1, le=20)):
+    """Rankings oficiais de mais vendidos com ofertas no site, com a capa do 1º colocado."""
+    now = utcnow()
+    live = (PublishedDeal.status == 'active', PublishedDeal.expires_at > now, PublishedDeal.rank_position.is_not(None),
+        PublishedDeal.rank_category_id.is_not(None))
+    groups = (await session.execute(select(PublishedDeal.rank_category_id, func.max(PublishedDeal.rank_category), func.count())
+        .where(*live).group_by(PublishedDeal.rank_category_id).having(func.count() >= min_items)
+        .order_by(func.count().desc()))).all()
+    items = []
+    for ranking_id, label, count in groups:
+        top = (await session.execute(select(PublishedDeal).where(*live, PublishedDeal.rank_category_id == ranking_id)
+            .order_by(PublishedDeal.rank_position.asc()).limit(1))).scalar_one()
+        items.append({'id': ranking_id, 'label': label, 'count': count, 'image_url': top.image_url, 'top': top.product_name})
+    return {'items': items, 'total': len(items)}
+
+
 @router.get('/home')
 async def home(session: AsyncSession = Depends(get_session)):
     deals = await list_public_deals(session=session, q=None, store=None, category=None, sort='featured',
-        min_price=None, max_price=None, min_discount=None, has_coupon=False, ids=None, limit=8, offset=0)
+        min_price=None, max_price=None, min_discount=None, has_coupon=False, ids=None, limit=8, offset=0,
+        trending=False, ranking=None)
+    trending = await list_public_deals(session=session, q=None, store=None, category=None, sort='featured',
+        min_price=None, max_price=None, min_discount=None, has_coupon=False, ids=None, limit=8, offset=0,
+        trending=True, ranking=None)
     discounts = await list_public_deals(session=session, q=None, store=None, category=None, sort='discount',
-        min_price=None, max_price=None, min_discount=None, has_coupon=False, ids=None, limit=8, offset=0)
+        min_price=None, max_price=None, min_discount=None, has_coupon=False, ids=None, limit=8, offset=0,
+        trending=False, ranking=None)
+    bestsellers = await list_public_deals(session=session, q=None, store=None, category=None, sort='best_selling',
+        min_price=None, max_price=None, min_discount=None, has_coupon=False, ids=None, limit=8, offset=0,
+        trending=False, ranking=None)
     campaigns = await list_promotions(session=session, store=None, kind='campaign', q=None, limit=6, offset=0)
     coupons = await list_promotions(session=session, store=None, kind='coupon', q=None, limit=6, offset=0)
-    return {'featured': deals, 'discounts': discounts, 'campaigns': campaigns, 'coupons': coupons}
+    return {'featured': deals, 'trending': trending, 'bestsellers': bestsellers, 'discounts': discounts, 'campaigns': campaigns, 'coupons': coupons}

@@ -21,3 +21,21 @@ def category_of(name: str, declared: str | None) -> str | None:
         if any(word in haystack for word in words):
             return key
     return None
+
+
+# Categoria raiz do Mercado Livre -> categoria pública. Vale mais que palavra-chave no título:
+# "Monitor" de bebê não é Informática, "Controle" de portão não é Games.
+ML_ROOT_KEYS = {
+    "MLB1051": "celulares",
+    "MLB1648": "informatica",
+    "MLB1000": "eletronicos",
+    "MLB1574": "casa",
+    "MLB5726": "casa",
+    "MLB1276": "esportes",
+    "MLB1246": "beleza",
+    "MLB1144": "games",
+    "MLB1132": "infantil",
+    "MLB1384": "infantil",
+    "MLB1071": "pets",
+    "MLB1430": "moda",
+}

@@ -339,7 +339,7 @@ def _link_label(url: str, store: str | None = None, link_label: str | None = Non
     return "abrir oferta"
 
 
-def format_message(opp: Opportunity, settings: Settings | None = None) -> str:
+def format_message(opp: Opportunity, settings: Settings | None = None, *, href: str | None = None) -> str:
     from app.affiliates.resolver import is_owned_shopee, is_shopee_url
     from app.core.config import get_settings
 
@@ -362,12 +362,16 @@ def format_message(opp: Opportunity, settings: Settings | None = None) -> str:
         title=opp.product_name,
         price=_positive(opp.current_price),
         listed=_listed_price(opp),
+        price_max=_price_max(opp),
+        price_condition=getattr(opp, "price_condition", None),
+        regular_price=getattr(opp, "regular_price", None),
         url=url,
         coupon=getattr(opp, "coupon_code", None),
         coupon_links=list(getattr(opp, "coupon_links", None) or []),
         store=store,
         installment=_installment_of(getattr(opp, "payment_hint", None)),
         link_label=short_store_slug(url),
+        href=href,
     )
 
 
@@ -377,11 +381,15 @@ def format_deal(
     price: Decimal | None,
     url: str,
     listed: Decimal | None = None,
+    price_max: Decimal | None = None,
+    price_condition: str | None = None,
+    regular_price: Decimal | None = None,
     coupon: str | None = None,
     coupon_links: list[str] | None = None,
     store: str | None = None,
     installment: str | None = None,
     link_label: str | None = None,
+    href: str | None = None,
     **_unused,
 ) -> str:
     blocks = ["🔥 <b>OFERTA IMPERDÍVEL!</b> 🔥", "", _html(_clean_title(title))]
@@ -390,7 +398,21 @@ def format_deal(
     prices: list[str] = []
     if listed and price and listed > price:
         prices.append(f"💰 De: <s>{_brl(listed)}</s>")
-    if price:
+    price_max = _positive(price_max)
+    if price and price_max and price_max > price:
+        # Anúncio com variações (tamanho, cor…): deixa claro que o menor valor é de uma opção.
+        prices.append(f"💚 <b><u>A PARTIR DE {_brl(price)}</u></b>")
+        prices.append(f"📏 Varia conforme a opção: até {_brl(price_max)}")
+    elif price and price_condition in _CONDITIONS:
+        # O preço do card só vale no Pix / com cupom ativado: diz isso e mostra o valor sem a condição.
+        when, otherwise = _CONDITIONS[price_condition]
+        prices.append(f"💚 <b><u>POR {_brl(price)}</u></b> {when}")
+        regular = _positive(regular_price)
+        if regular and regular > price:
+            prices.append(f"💳 ou {_brl(regular)} {otherwise}")
+        if price_condition == "coupon" and not (coupon or "").strip():
+            prices.append("🎟️ Ative o cupom na página do produto")
+    elif price:
         prices.append(f"💚 <b><u>POR {_brl(price)}</u></b>")
     parcel = _installment_of(installment)
     if parcel:
@@ -415,8 +437,8 @@ def format_deal(
         blocks.extend(["", "\n".join(lines)])
     if url:
         label = _link_label(url, store, link_label)
-        href = _html(url).replace('"', "%22")
-        blocks.extend(["", "🔗 <b>Link p/ Compra:</b>", f'<a href="{href}">{_html(label)}</a>'])
+        target = _html(href or url).replace('"', "%22")
+        blocks.extend(["", "🔗 <b>Link p/ Compra:</b>", f'<a href="{target}">{_html(label)}</a>'])
     blocks.extend(
         [
             "",
@@ -481,12 +503,27 @@ def store_label(store: str | None, url: str = "") -> str | None:
     return None
 
 
+_CONDITIONS = {
+    "pix": ("no Pix", "nos outros meios"),
+    "coupon": ("com cupom", "sem o cupom"),
+}
+
+
+def _price_max(opp) -> Decimal | None:
+    top = _positive(getattr(opp, "price_max", None))
+    current = _positive(getattr(opp, "current_price", None))
+    return top if top and current and top > current else None
+
+
 def _listed_price(opp) -> Decimal | None:
     listed = _positive(getattr(opp, "listed_price", None))
     current = _positive(getattr(opp, "current_price", None))
     if listed and current and listed > current:
         return listed
     pct = _positive(getattr(opp, "announced_discount_pct", None))
+    if _price_max(opp):
+        # Faixa de preço por variação: o % vale para alguma opção, não para o menor preço.
+        return None
     if pct and current and 0 < pct < 90:
         reconstructed = (current / (Decimal("1") - pct / Decimal("100"))).quantize(Decimal("0.01"))
         if reconstructed > current:
@@ -705,6 +742,28 @@ async def _claim_publication(
         return True
 
 
+async def create_tracked_link(session, destination: str, opp, settings: Settings) -> str | None:
+    """Com PUBLIC_SITE_URL, devolve <site>/go/t/<id> para medir cliques do Telegram; sem ela, None (link direto)."""
+    import secrets
+
+    from app.models.entities import TrackedLink
+    from app.storefront.catalog import store_of
+
+    base = (settings.public_site_url or "").strip().rstrip("/")
+    if not base or not destination:
+        return None
+    token = secrets.token_urlsafe(6)
+    try:
+        # Mesma sessão do poll: no SQLite uma segunda sessão esperaria o lock de escrita.
+        session.add(TrackedLink(id=token, destination=destination, opportunity_id=str(getattr(opp, "id", "") or ""),
+            store=store_of(opp) if getattr(opp, "source", None) else "", channel="telegram"))
+        await session.flush()
+    except Exception as exc:
+        log.warning("tracked_link_failed", error=str(exc)[:160])
+        return None
+    return f"{base}/go/t/{token}"
+
+
 async def publish_opportunity(session, opp: Opportunity, settings: Settings, *, http=None) -> str:
     allowed, reason = should_publish(opp, settings)
     if not allowed:
@@ -731,7 +790,8 @@ async def publish_opportunity(session, opp: Opportunity, settings: Settings, *, 
     photo = await _resolve_publish_photo(opp, link)
     if not photo:
         return "no_image"
-    body = format_message(opp, settings)
+    tracked = await create_tracked_link(session, link, opp, settings)
+    body = format_message(opp, settings, href=tracked)
     if not await _claim_publication(keys, str(opp.id), body, since=since):
         return "duplicate"
     sent = await _deliver(
@@ -740,7 +800,7 @@ async def publish_opportunity(session, opp: Opportunity, settings: Settings, *, 
         photo,
         http=http,
         key=keys[0],
-        button_url=link,
+        button_url=tracked or link,
         button_label=button_label(getattr(opp, "merchant", None), link or ""),
     )
     if not sent:

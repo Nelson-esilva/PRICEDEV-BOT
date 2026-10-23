@@ -88,6 +88,18 @@ def stamp_mercadolivre(url: str | None, settings: Settings) -> str | None:
     return sanitize_purchase_url(stamped)
 
 
+def stamp_mercadolivre_page(url: str | None, settings: Settings) -> str | None:
+    """Afiliado em qualquer página do ML (campanhas, listas), não só em produtos. Remove o #fragmento."""
+    word = (settings.ml_affiliate_matt_word or "").strip()
+    tool = (settings.ml_affiliate_matt_tool or "").strip()
+    parsed = urlparse(url or "")
+    if not word or not tool or parsed.scheme != "https" or not _is_mercadolivre_host((parsed.hostname or "").lower()):
+        return None
+    kept = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in _ML_DROP]
+    kept += [("matt_word", word), ("matt_tool", tool)]
+    return sanitize_purchase_url(urlunparse(parsed._replace(query=urlencode(kept), fragment="")))
+
+
 def _amazon_asin(url: str | None) -> str | None:
     if not url:
         return None

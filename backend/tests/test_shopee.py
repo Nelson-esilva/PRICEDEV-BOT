@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -109,6 +110,7 @@ async def test_poll_lists_without_keyword():
             shopee_app_id="123",
             shopee_app_secret="sec",
             shopee_pages_per_list=1,
+            shopee_keywords="",
         ),
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
@@ -116,3 +118,35 @@ async def test_poll_lists_without_keyword():
     assert captured
     assert all("keyword" not in row.get("variables", {}) for row in captured)
     assert {row["variables"]["listType"] for row in captured} == {0, 1, 2}
+
+
+async def test_poll_searches_keywords_and_filters_quality():
+    captured: list[dict] = []
+    nodes = [
+        {"itemId": 1, "productName": "Fone A", "priceMin": "50", "priceMax": "80", "priceDiscountRate": 20,
+         "sales": 5000, "ratingStar": "4.8", "commission": "3.5", "offerLink": "https://s.shopee.com.br/a"},
+        {"itemId": 2, "productName": "Fone B", "priceMin": "40", "sales": 3, "ratingStar": "4.9",
+         "offerLink": "https://s.shopee.com.br/b"},
+        {"itemId": 3, "productName": "Fone C", "priceMin": "30", "sales": 900, "ratingStar": "3.9",
+         "offerLink": "https://s.shopee.com.br/c"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        captured.append(body)
+        found = nodes if body["variables"].get("keyword") == "fone" else []
+        return httpx.Response(200, json={"data": {"productOfferV2": {
+            "nodes": found, "pageInfo": {"page": 1, "limit": 20, "hasNextPage": False}}}})
+
+    source = ShopeeSource(
+        Settings(enable_shopee=True, shopee_app_id="123", shopee_app_secret="sec",
+                 shopee_pages_per_list=1, shopee_keywords="fone"),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    offers = await source.poll()
+    order = [row["variables"].get("keyword") or row["variables"]["listType"] for row in captured]
+    assert order == [2, 0, "fone", 1]
+    assert [o.native_product_id for o in offers] == ["1"]
+    kept = offers[0]
+    assert kept.sales_count == 5000 and kept.rating == Decimal("4.80")
+    assert kept.price_max == Decimal("80.00") and kept.commission_value == Decimal("3.50")

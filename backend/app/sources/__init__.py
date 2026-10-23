@@ -4,6 +4,7 @@ from app.sources.lomadee import LomadeeSource
 from app.sources.magalu import MagaluSource
 from app.sources.mercadolivre import MercadoLivreSource
 from app.sources.mlhub import MlHubSource
+from app.sources.mlofficial import MlOfficialSource
 from app.sources.pelando import PelandoSource
 from app.sources.registry import build_connectors
 from app.sources.shopee import ShopeeSource
@@ -15,6 +16,7 @@ __all__ = [
     "MagaluSource",
     "MercadoLivreSource",
     "MlHubSource",
+    "MlOfficialSource",
     "PelandoSource",
     "ShopeeSource",
     "WatchlistSource",

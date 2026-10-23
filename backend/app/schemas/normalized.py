@@ -70,6 +70,23 @@ class NormalizedOffer(BaseModel):
     comment_count: int | None = None
     temperature: int | None = None
     announced_discount_pct: Decimal | None = None
+    # Sinais de demanda vindos da fonte (vendas, avaliação, comissão por venda).
+    sales_count: int | None = None
+    rating: Decimal | None = None
+    commission_value: Decimal | None = None
+    price_max: Decimal | None = None
+    best_seller: bool | None = None
+    # Preço condicionado: effective_price vale só no Pix ("pix") ou com cupom ativado ("coupon");
+    # regular_price é o valor nos outros meios / sem cupom.
+    price_condition: str | None = None
+    regular_price: Decimal | None = None
+    # Catálogo oficial do ML: produto, fotos, posição no ranking e categoria pública.
+    catalog_product_id: str | None = None
+    gallery: list[str] | None = None
+    rank_position: int | None = None
+    rank_category: str | None = None
+    rank_category_id: str | None = None
+    official_category: str | None = None
     identity_confidence: IdentityConfidence = IdentityConfidence.LOW
     price_verified: bool = False
     is_inferred: bool = False

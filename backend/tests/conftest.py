@@ -56,6 +56,17 @@ async def client(test_settings: Settings):
         yield ac
 
 
+@pytest.fixture(autouse=True)
+def isolated_data_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Termos em alta e token do ML moram em data/; testes nunca leem nem gravam os reais.
+    from app.sources import mlapi
+    from app.storefront import trends
+
+    monkeypatch.setattr(trends, "TRENDS_FILE", tmp_path / "ml_trends.json")
+    monkeypatch.setattr(trends, "_cache", {"mtime": None, "terms": []})
+    monkeypatch.setattr(mlapi, "TOKEN_FILE", tmp_path / "ml_oauth.json")
+
+
 def make_offer(**kwargs) -> NormalizedOffer:
     now = kwargs.pop("now", datetime(2026, 10, 1, 12, 0, tzinfo=UTC))
     defaults = dict(

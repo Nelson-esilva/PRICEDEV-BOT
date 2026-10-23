@@ -51,8 +51,8 @@ async def list_opportunities(
             stmt = stmt.where(Opportunity.source.in_(wanted))
             count_stmt = count_stmt.where(Opportunity.source.in_(wanted))
     else:
-        stmt = stmt.where(Opportunity.source.notin_(("mock", "mlhub", "shopee")))
-        count_stmt = count_stmt.where(Opportunity.source.notin_(("mock", "mlhub", "shopee")))
+        stmt = stmt.where(Opportunity.source.notin_(("mock", "mlhub", "mlofficial", "shopee")))
+        count_stmt = count_stmt.where(Opportunity.source.notin_(("mock", "mlhub", "mlofficial", "shopee")))
     if merchant:
         stmt = stmt.where(Opportunity.merchant.ilike(f"%{merchant}%"))
         count_stmt = count_stmt.where(Opportunity.merchant.ilike(f"%{merchant}%"))

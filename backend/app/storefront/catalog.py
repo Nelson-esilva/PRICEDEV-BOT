@@ -1,27 +1,30 @@
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_session_factory, utcnow
 from app.core.logging import get_logger
 from app.core.search import CATEGORY_KEYS
-from app.models.entities import Opportunity, PublishedDeal
+from app.models.entities import AffiliateConversion, DealClick, Opportunity, Product, PublishedDeal
 from app.storefront.taxonomy import category_of
+from app.storefront.trends import load_trends, trend_of
 
 log = get_logger("storefront")
 
-PUBLIC_SOURCES = frozenset({"shopee", "mlhub"})
+PUBLIC_SOURCES = frozenset({"shopee", "mlhub", "mlofficial"})
 AFFILIATE_OK = frozenset({"converted", "official"})
 STORE_BY_SOURCE = {
     "shopee": "shopee",
     "mlhub": "mercadolivre",
+    "mlofficial": "mercadolivre",
 }
 STORE_LABELS = {
     "shopee": "Shopee",
@@ -56,7 +59,14 @@ def discount_of(opportunity: Opportunity) -> tuple[Decimal | None, str | None]:
 
 
 def list_price_of(opportunity: Opportunity) -> Decimal | None:
+    listed = opportunity.listed_price
+    if listed is not None and listed > opportunity.current_price:
+        return listed
     pct, basis = discount_of(opportunity)
+    if basis == "store" and opportunity.price_max and opportunity.price_max > opportunity.current_price:
+        # Anúncio com variações: o percentual da loja é o "até X%" da opção mais descontada,
+        # não do menor preço. Reconstruir o "De" daria um preço riscado inventado.
+        return None
     if basis == "store":
         # Mesma reconstrução do Telegram: preço anterior implícito no percentual da loja.
         if pct is None or pct >= 90:
@@ -67,6 +77,35 @@ def list_price_of(opportunity: Opportunity) -> Decimal | None:
     if median is not None and median > opportunity.current_price:
         return median
     return None
+
+
+def demand_score_of(
+    *,
+    sales: int | None,
+    rating: Decimal | None,
+    discount: Decimal | None,
+    commission: Decimal | None,
+    best_seller: bool | None,
+    clicks_7d: int,
+    orders_30d: int,
+    trending: bool = False,
+    rank_position: int | None = None,
+) -> int:
+    """0–100. Pedidos reais pesam mais; vendas e nota da loja dão o sinal inicial."""
+    def log_points(value: float, per_decade: float, cap: float) -> float:
+        return min(cap, per_decade * math.log10(1 + max(0.0, value)))
+
+    points = log_points(sales or 0, 7, 35)
+    points += min(15.0, max(0.0, (float(rating) - 4.0) * 15)) if rating else 0
+    points += min(15.0, float(discount or 0) * 0.3)
+    points += log_points(float(commission or 0), 5, 10)
+    points += 5 if best_seller else 0
+    points += log_points(clicks_7d, 5, 10)
+    points += log_points(orders_30d, 10, 20)
+    # O que as pessoas estão buscando agora sobe na vitrine; top 10 do ranking oficial também.
+    points += 12 if trending else 0
+    points += 6 if rank_position and rank_position <= 10 else 0
+    return max(0, min(100, round(points)))
 
 
 def destination_of(opportunity: Opportunity) -> str | None:
@@ -98,13 +137,23 @@ def qualifies(opportunity: Opportunity, settings: Settings) -> bool:
     return destination_of(opportunity) is not None
 
 
-def _apply_snapshot(deal: PublishedDeal, opportunity: Opportunity, *, now: datetime, ttl: timedelta) -> None:
+def _apply_snapshot(
+    deal: PublishedDeal,
+    opportunity: Opportunity,
+    *,
+    now: datetime,
+    ttl: timedelta,
+    clicks_7d: int = 0,
+    orders_30d: int = 0,
+    trends: list[str] | None = None,
+) -> None:
     deal.product_id = opportunity.product_id
     deal.source = opportunity.source
     deal.store = store_of(opportunity)
     deal.product_name = opportunity.product_name
     deal.merchant = opportunity.merchant or STORE_LABELS.get(deal.store)
-    deal.category = infer_category(opportunity.product_name, opportunity.category)
+    # Categoria oficial do ML vence a inferência por palavra no título.
+    deal.category = opportunity.official_category or infer_category(opportunity.product_name, opportunity.category)
     deal.image_url = opportunity.image_url
     deal.description = opportunity.description
     deal.coupon_code = opportunity.coupon_code
@@ -115,6 +164,35 @@ def _apply_snapshot(deal: PublishedDeal, opportunity: Opportunity, *, now: datet
     deal.announced_discount_pct = opportunity.announced_discount_pct
     deal.discount_pct, deal.discount_basis = discount_of(opportunity)
     deal.acceptance_score = opportunity.acceptance_score
+    deal.price_max = opportunity.price_max if opportunity.price_max and opportunity.price_max > deal.current_price else None
+    deal.sales_count = opportunity.sales_count
+    deal.rating = opportunity.rating
+    deal.best_seller = opportunity.best_seller
+    deal.free_shipping = opportunity.free_shipping
+    deal.price_condition = opportunity.price_condition
+    deal.regular_price = (
+        opportunity.regular_price
+        if opportunity.price_condition and opportunity.regular_price and opportunity.regular_price > deal.current_price
+        else None
+    )
+    deal.gallery = opportunity.gallery or None
+    deal.rank_position = opportunity.rank_position
+    deal.rank_category = opportunity.rank_category if opportunity.rank_position else None
+    deal.rank_category_id = opportunity.rank_category_id if opportunity.rank_position else None
+    deal.trending = trend_of(opportunity.product_name, trends or []) is not None
+    deal.clicks_7d = clicks_7d
+    deal.orders_30d = orders_30d
+    deal.demand_score = demand_score_of(
+        sales=opportunity.sales_count,
+        rating=opportunity.rating,
+        discount=deal.discount_pct,
+        commission=opportunity.commission_value,
+        best_seller=opportunity.best_seller,
+        clicks_7d=clicks_7d,
+        orders_30d=orders_30d,
+        trending=deal.trending,
+        rank_position=deal.rank_position,
+    )
     deal.currency = opportunity.currency
     deal.affiliate_network = opportunity.affiliate_network or deal.store
     deal.destination_url = destination_of(opportunity) or deal.destination_url
@@ -156,6 +234,9 @@ async def sync_catalog(session: AsyncSession, settings: Settings, *, now: dateti
         else []
     )
     by_opp = {deal.opportunity_id: deal for deal in existing}
+    clicks = await _recent_clicks(session, since=moment - timedelta(days=7))
+    orders = await _recent_orders(session, eligible, since=moment - timedelta(days=30))
+    trends = load_trends()
     created = 0
     updated = 0
     for opportunity in eligible:
@@ -172,7 +253,16 @@ async def sync_catalog(session: AsyncSession, settings: Settings, *, now: dateti
             created += 1
         else:
             updated += 1
-        _apply_snapshot(deal, opportunity, now=moment, ttl=ttl)
+        _apply_snapshot(
+            deal,
+            opportunity,
+            now=moment,
+            ttl=ttl,
+            # Cliques do site usam o id do deal; os do Telegram, o id da oportunidade.
+            clicks_7d=clicks.get(deal.id or "", 0) + clicks.get(opportunity.id, 0),
+            orders_30d=orders.get(opportunity.id, 0),
+            trends=trends,
+        )
 
     stale_stmt = select(PublishedDeal).where(PublishedDeal.status == "active")
     if eligible_ids:
@@ -190,6 +280,34 @@ async def sync_catalog(session: AsyncSession, settings: Settings, *, now: dateti
         "created": created,
         "updated": updated,
         "expired": expired,
+    }
+
+
+async def _recent_clicks(session: AsyncSession, *, since: datetime) -> dict[str, int]:
+    rows = await session.execute(
+        select(DealClick.deal_id, func.count()).where(DealClick.clicked_at >= since).group_by(DealClick.deal_id)
+    )
+    return {deal_id: count for deal_id, count in rows.all()}
+
+
+async def _recent_orders(session: AsyncSession, eligible: list[Opportunity], *, since: datetime) -> dict[str, int]:
+    """Pedidos atribuídos (qualquer status) por oportunidade, casando loja + id nativo do produto."""
+    if not eligible:
+        return {}
+    natives = dict(
+        (await session.execute(
+            select(Product.id, Product.native_product_id).where(Product.id.in_({o.product_id for o in eligible}))
+        )).all()
+    )
+    rows = await session.execute(
+        select(AffiliateConversion.store, AffiliateConversion.item_id, func.count(func.distinct(AffiliateConversion.order_id)))
+        .where(AffiliateConversion.purchased_at >= since)
+        .group_by(AffiliateConversion.store, AffiliateConversion.item_id)
+    )
+    counts = {(store, item): count for store, item, count in rows.all()}
+    return {
+        o.id: counts.get((store_of(o), natives.get(o.product_id, "")), 0)
+        for o in eligible
     }
 
 

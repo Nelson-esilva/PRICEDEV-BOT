@@ -13,6 +13,8 @@ from app.monitoring.quarantine import trip as trip_quarantine
 from app.monitoring.retention import run_retention
 from app.publishing.telegram import publish_opportunity
 from app.storefront.catalog import PUBLIC_SOURCES, publish_public_catalog
+from app.storefront.conversions import run_conversions
+from app.storefront.ml_enrich import run_ml_enrich
 from app.storefront.promotions import run_promotions
 from app.sources.base import SourceAuthError, SourceBlocked, SourceConnector, SourceError
 from app.sources.registry import build_connectors
@@ -130,6 +132,8 @@ async def run_scheduler(settings: Settings | None = None) -> None:
     last_retention = None
     last_catalog = None
     promotions_task = asyncio.create_task(run_promotions(settings))
+    conversions_task = asyncio.create_task(run_conversions(settings))
+    enrich_task = asyncio.create_task(run_ml_enrich(settings))
     try:
         while True:
             now = utcnow()
@@ -156,10 +160,11 @@ async def run_scheduler(settings: Settings | None = None) -> None:
                 await asyncio.sleep(0)
             await asyncio.sleep(1)
     finally:
-        promotions_task.cancel()
-        try:
-            await promotions_task
-        except asyncio.CancelledError:
-            pass
+        for task in (promotions_task, conversions_task, enrich_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         for connector in connectors:
             await connector.close()

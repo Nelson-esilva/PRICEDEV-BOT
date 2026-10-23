@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -56,6 +57,15 @@ class Settings(BaseSettings):
     shopee_max_items: int = 400
     shopee_pages_per_list: int = 4
     shopee_page_size: int = 50
+    # Filtro de qualidade na coleta (0 desliga).
+    shopee_min_sales: int = 50
+    shopee_min_rating: float = 4.5
+    # Etiquetas no short link (subIds), separadas por vírgula; aparecem no relatório de conversões.
+    shopee_sub_ids: str = "pricedev"
+    # Relatório de conversões da Shopee → ranking por pedidos reais.
+    enable_shopee_conversions: bool = True
+    shopee_conversions_poll_seconds: int = 1800
+    shopee_conversions_days: int = 30
     discovery_keywords: str = ""
     kabum_keywords: str = ""
     kabum_keywords_per_poll: int = 8
@@ -74,6 +84,8 @@ class Settings(BaseSettings):
     ml_affiliate_matt_word: str = ""
     ml_affiliate_matt_tool: str = ""
     ml_affiliate_cookie: str = ""
+    # Banners de campanha da home do ML (só campanhas do próprio ML; anúncios pagos ficam de fora).
+    enable_ml_home_campaigns: bool = True
     amazon_affiliate_tag: str = ""
     enable_awin: bool = False
     awin_publisher_id: str = ""
@@ -86,6 +98,32 @@ class Settings(BaseSettings):
     ml_hub_poll_seconds: int = 120
     ml_hub_max_items: int = 1200
     ml_hub_pages_per_query: int = 8
+    # API oficial do ML (DevCenter): mais vendidos por categoria + preço de catálogo.
+    # O refresh token é rotativo; depois da 1ª renovação o válido fica em backend/data/ml_oauth.json.
+    enable_ml_official: bool = True
+    ml_client_id: str = ""
+    ml_client_secret: str = ""
+    ml_redirect_uri: str = ""
+    ml_refresh_token: str = ""
+    ml_official_poll_seconds: int = 1800
+    ml_official_per_category: int = 20
+    # Categorias raiz do MLB: Celulares, Informática, Eletrônicos, Casa, Eletrodomésticos, Esportes,
+    # Beleza, Games, Brinquedos, Ferramentas, Bebês, Pets, Moda.
+    ml_official_categories: str = (
+        "MLB1051,MLB1648,MLB1000,MLB1574,MLB5726,MLB1276,MLB1246,MLB1144,MLB1132,MLB263532,MLB1384,MLB1071,MLB1430"
+    )
+    # Termos que viram páginas de ranking ("monitor" -> categoria Monitores do ML).
+    ml_ranking_terms: str = (
+        "monitor,notebook,smartphone,smart tv,fone de ouvido bluetooth,air fryer,cadeira gamer,smartwatch,"
+        "tenis,perfume,whey protein,aspirador robo,console,teclado gamer,mouse gamer,ssd,cafeteira,ventilador"
+    )
+    # Quantos termos em alta viram busca de ofertas (no catálogo do ML e na Shopee).
+    ml_trend_search_terms: int = 10
+    # Enriquecimento das ofertas ML (fotos oficiais, frete, categoria, ranking): lote a cada ciclo.
+    ml_enrich_batch: int = 120
+    ml_enrich_poll_seconds: int = 600
+    ml_enrich_refresh_hours: int = 12
+    shopee_trend_keywords: int = 8
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -123,6 +161,8 @@ class Settings(BaseSettings):
     storefront_retention_days: int = 14
     click_log_retention_days: int = 90
     storefront_min_score: int = 0
+    # URL pública do site (ex.: https://promodev.com.br). Com ela, os links do Telegram passam pelo /go e viram cliques medidos.
+    public_site_url: str = ""
 
     score_weight_historical_discount: int = 30
     score_weight_history_quality: int = 20
@@ -132,8 +172,20 @@ class Settings(BaseSettings):
     score_weight_community: int = 10
 
     @property
+    def shopee_sub_id_list(self) -> list[str]:
+        return [re.sub(r"[^A-Za-z0-9]", "", t) for t in self.shopee_sub_ids.split(",") if t.strip()]
+
+    @property
     def shopee_keyword_list(self) -> list[str]:
         return [k.strip() for k in self.shopee_keywords.split(",") if k.strip()]
+
+    @property
+    def ml_official_category_list(self) -> list[str]:
+        return [c.strip().upper() for c in self.ml_official_categories.split(",") if c.strip()]
+
+    @property
+    def ml_ranking_term_list(self) -> list[str]:
+        return [t.strip() for t in self.ml_ranking_terms.split(",") if t.strip()]
 
     @property
     def discovery_keyword_list(self) -> list[str]:

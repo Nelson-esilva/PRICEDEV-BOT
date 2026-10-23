@@ -221,8 +221,10 @@ class MlHubSource(SourceConnector):
                 "hub_extra": extra,
                 "hub_best": best,
             }
+            offer.best_seller = bool(offer.best_seller or best) or None
             pct = commissions.get(offer.native_product_id)
             if pct is not None:
+                offer.commission_value = money(offer.effective_price * pct / Decimal("100"))
                 pretty = str(int(pct)) if pct == pct.to_integral() else str(pct)
                 label = f"Ganhos extras {pretty}%" if extra else f"Ganhos {pretty}%"
                 offer.description = label

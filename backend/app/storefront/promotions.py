@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
@@ -10,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from sqlalchemy import select
 
+from app.affiliates.resolver import stamp_mercadolivre_page
 from app.core.config import Settings
 from app.core.db import as_utc, get_session_factory, utcnow
 from app.core.logging import get_logger
@@ -44,6 +46,10 @@ def owned_campaign_link(link: str | None, store: str, settings: Settings) -> boo
         return False
     if store == 'shopee':
         return host in {'shopee.com.br', 'www.shopee.com.br', 's.shopee.com.br', 'shope.ee', 'shp.ee'}
+    if store == 'mercadolivre':
+        word = (settings.ml_affiliate_matt_word or '').strip()
+        ml_host = host == 'mercadolivre.com.br' or host.endswith('.mercadolivre.com.br')
+        return bool(word) and ml_host and parse_qs(parsed.query).get('matt_word') == [word]
     if store != 'kabum' or not settings.enable_awin:
         return False
     query = parse_qs(parsed.query)
@@ -96,11 +102,105 @@ async def fetch_awin(settings: Settings, client: httpx.AsyncClient) -> list[dict
             rows.append(dict(source='awin', external_id=str(raw['promotionId']), store='kabum',
                 kind='coupon' if raw.get('type') == 'voucher' and code else 'campaign',
                 title=title, description=plain(raw.get('description')), terms=plain(raw.get('terms')),
-                code=code, image_url=None, destination_url=link,
+                code=code, image_url=None, destination_url=link, _landing=raw.get('url'),
                 starts_at=date(raw.get('startDate')), expires_at=date(raw.get('endDate'))))
         if len(data) < 200:
+            await _attach_official_images('awin', rows, client)
             return rows
     raise ValueError('Awin promotions exceeded pagination limit')
+
+
+BROWSER_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
+    'Accept-Language': 'pt-BR,pt;q=0.9',
+}
+_OG_IMAGE = re.compile(r'<meta[^>]+(?:property="og:image"[^>]+content="([^"]+)"|content="([^"]+)"[^>]+property="og:image")')
+# Páginas novas visitadas por sincronização; as já conhecidas reaproveitam o que está no banco.
+NEW_LOOKUPS_PER_SYNC = 25
+
+
+async def _known(source: str) -> dict[str, PublicPromotion]:
+    async with get_session_factory()() as session:
+        rows = (await session.execute(select(PublicPromotion).where(PublicPromotion.source == source))).scalars().all()
+        return {row.external_id: row for row in rows}
+
+
+async def _attach_official_images(source: str, rows: list[dict], client: httpx.AsyncClient) -> None:
+    """Imagem oficial (og:image) da página da loja para promoções que não trazem imagem."""
+    known = await _known(source)
+    budget = NEW_LOOKUPS_PER_SYNC
+    for row in rows:
+        landing = row.pop('_landing', None)
+        if row.get('image_url'):
+            continue
+        previous = known.get(row['external_id'])
+        if previous is not None and previous.image_url:
+            row['image_url'] = previous.image_url
+            continue
+        target = urlparse(landing or '')
+        if budget <= 0 or target.scheme != 'https' or target.hostname not in {'www.kabum.com.br', 'kabum.com.br'}:
+            continue
+        budget -= 1
+        try:
+            page = await client.get(landing, headers=BROWSER_HEADERS, follow_redirects=True, timeout=15)
+            match = _OG_IMAGE.search(page.text) if page.status_code == 200 else None
+            row['image_url'] = sanitize_media_url((match.group(1) or match.group(2)) if match else None)
+        except httpx.HTTPError as exc:
+            log.warning('promotion_image_failed', source=source, error_type=type(exc).__name__)
+
+
+def ml_banner_title(raw: str) -> str:
+    """'11.11. Supermercado. 60% OFF. Consulte termos e condições' → '11.11 · Supermercado · 60% OFF'."""
+    parts = [p.strip(' .;') for p in re.split(r'\.\s+|;\s*', raw or '')]
+    keep = [p for p in parts if p and not re.match(r'(?i)consulte|imagens ilustrativas|v[aá]lido', p)]
+    return ' · '.join(keep)[:200]
+
+
+def ml_home_banners(html: str) -> list[dict]:
+    """Slides do carrossel principal da home do ML. Só MERCH (campanhas do próprio ML), nunca anúncios pagos."""
+    start = html.find('{"pageProps":{"atf"')
+    if start < 0:
+        return []
+    try:
+        data, _ = json.JSONDecoder().raw_decode(html[start:])
+    except json.JSONDecodeError:
+        return []
+    banners = []
+    for component in ((data.get('pageProps') or {}).get('atf') or {}).get('components') or []:
+        if component.get('type') != 'exhibitor':
+            continue
+        for element in component.get('elements') or []:
+            merch = ((element.get('track') or {}).get('merch_data')) or {}
+            link = (((element.get('actions') or {}).get('content_link')) or {}).get('link')
+            image = sanitize_media_url(((element.get('picture') or {}).get('src')))
+            if element.get('source') != 'MERCH' or not merch.get('campaign_id') or not link or not image:
+                continue
+            banners.append(dict(campaign_id=str(merch['campaign_id']), title=ml_banner_title(element.get('title') or ''),
+                image=image, click=link))
+        break
+    return banners
+
+
+async def fetch_ml_home(settings: Settings, client: httpx.AsyncClient) -> list[dict]:
+    response = await client.get('https://www.mercadolivre.com.br/', headers=BROWSER_HEADERS, follow_redirects=True)
+    response.raise_for_status()
+    known = await _known('ml_home')
+    budget = NEW_LOOKUPS_PER_SYNC
+    rows = []
+    for banner in ml_home_banners(response.text):
+        previous = known.get(banner['campaign_id'])
+        destination = previous.destination_url if previous is not None else None
+        if not destination and budget > 0:
+            # O link do slide é o contador de cliques do ML: abre uma única vez para achar a página da campanha.
+            budget -= 1
+            hop = await client.get(banner['click'], headers=BROWSER_HEADERS, follow_redirects=False)
+            destination = stamp_mercadolivre_page(hop.headers.get('location'), settings)
+        if not banner['title'] or not owned_campaign_link(destination, 'mercadolivre', settings):
+            continue
+        rows.append(dict(source='ml_home', external_id=banner['campaign_id'], store='mercadolivre', kind='campaign',
+            title=banner['title'], code=None, terms=None, description=None, destination_url=destination,
+            image_url=banner['image'], starts_at=None, expires_at=None))
+    return rows
 
 
 async def fetch_shopee(settings: Settings, client: httpx.AsyncClient) -> list[dict]:
@@ -165,6 +265,8 @@ async def sync_promotions(settings: Settings):
         jobs.append(('awin', fetch_awin))
     if settings.enable_shopee and settings.shopee_app_id and settings.shopee_app_secret:
         jobs.append(('shopee_campaign', fetch_shopee))
+    if settings.enable_ml_home_campaigns and settings.ml_affiliate_matt_word and settings.ml_affiliate_matt_tool:
+        jobs.append(('ml_home', fetch_ml_home))
     async with httpx.AsyncClient(timeout=30) as client:
         for source, fetch in jobs:
             try:

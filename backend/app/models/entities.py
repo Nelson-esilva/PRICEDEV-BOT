@@ -156,6 +156,21 @@ class Opportunity(Base):
     free_shipping: Mapped[bool | None] = mapped_column(Boolean)
     comment_count: Mapped[int | None] = mapped_column(Integer)
     announced_discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    listed_price: Mapped[Decimal | None] = mapped_column(Money)
+    price_max: Mapped[Decimal | None] = mapped_column(Money)
+    sales_count: Mapped[int | None] = mapped_column(Integer)
+    rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
+    commission_value: Mapped[Decimal | None] = mapped_column(Money)
+    best_seller: Mapped[bool | None] = mapped_column(Boolean)
+    price_condition: Mapped[str | None] = mapped_column(String(16))
+    regular_price: Mapped[Decimal | None] = mapped_column(Money)
+    catalog_product_id: Mapped[str | None] = mapped_column(String(32))
+    gallery: Mapped[list | None] = mapped_column(JSON)
+    rank_position: Mapped[int | None] = mapped_column(Integer)
+    rank_category: Mapped[str | None] = mapped_column(String(120))
+    rank_category_id: Mapped[str | None] = mapped_column(String(32))
+    official_category: Mapped[str | None] = mapped_column(String(32))
+    enriched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     original_purchase_url: Mapped[str | None] = mapped_column(Text)
     validated_purchase_url: Mapped[str | None] = mapped_column(Text)
     affiliate_url: Mapped[str | None] = mapped_column(Text)
@@ -302,6 +317,21 @@ class PublishedDeal(Base):
     discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
     discount_basis: Mapped[str | None] = mapped_column(String(32))
     acceptance_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    price_max: Mapped[Decimal | None] = mapped_column(Money)
+    sales_count: Mapped[int | None] = mapped_column(Integer)
+    rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
+    best_seller: Mapped[bool | None] = mapped_column(Boolean)
+    free_shipping: Mapped[bool | None] = mapped_column(Boolean)
+    price_condition: Mapped[str | None] = mapped_column(String(16))
+    regular_price: Mapped[Decimal | None] = mapped_column(Money)
+    gallery: Mapped[list | None] = mapped_column(JSON)
+    rank_position: Mapped[int | None] = mapped_column(Integer)
+    rank_category: Mapped[str | None] = mapped_column(String(120))
+    rank_category_id: Mapped[str | None] = mapped_column(String(32))
+    trending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    orders_30d: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    clicks_7d: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    demand_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="BRL", nullable=False)
     affiliate_network: Mapped[str | None] = mapped_column(String(64))
     destination_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -323,7 +353,45 @@ class DealClick(Base):
     store: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     user_agent: Mapped[str | None] = mapped_column(String(256))
     referer: Mapped[str | None] = mapped_column(String(512))
+    channel: Mapped[str] = mapped_column(String(16), default="site", nullable=False)
     clicked_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+
+
+class TrackedLink(Base):
+    """Link curto /go/t/<id> dos posts do Telegram. Fora da retenção: posts antigos continuam funcionando."""
+
+    __tablename__ = "tracked_links"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
+    opportunity_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    store: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), default="telegram", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+
+
+class AffiliateConversion(Base):
+    """Item de pedido atribuído ao afiliado (relatório de conversões da loja)."""
+
+    __tablename__ = "affiliate_conversions"
+    __table_args__ = (
+        UniqueConstraint("store", "order_id", "item_id", name="uq_conversion_order_item"),
+        Index("ix_conversion_item_time", "store", "item_id", "purchased_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    store: Mapped[str] = mapped_column(String(32), nullable=False)
+    conversion_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    order_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    order_status: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    item_name: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(Money)
+    commission: Mapped[Decimal | None] = mapped_column(Money)
+    sub_ids: Mapped[str] = mapped_column(String(256), default="", nullable=False)
+    purchased_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
 
 class PublicPromotion(Base):

@@ -15,6 +15,7 @@ from app.core.money import money
 from app.core.urls import sanitize_media_url, sanitize_purchase_url
 from app.schemas.normalized import IdentityConfidence, NormalizedOffer
 from app.sources.base import SourceAuthError, SourceConnector, SourceError
+from app.storefront.trends import load_trends
 
 log = get_logger("shopee")
 
@@ -47,6 +48,9 @@ query ProductOffers($keyword: String, $page: Int, $limit: Int, $listType: Int, $
       shopName
       shopType
       commissionRate
+      commission
+      sales
+      ratingStar
     }
     pageInfo { page limit hasNextPage }
   }
@@ -92,11 +96,13 @@ def compact_json(body: dict[str, Any]) -> str:
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
 
 
+# Ordem = prioridade na cota: o que mais vende primeiro, maior comissão por último.
 LISTS = (
+    (2, 2, "top"),
     (0, 2, "recomendados"),
     (1, 5, "comissao"),
-    (2, 2, "top"),
 )
+KEYWORD_PAGE = 20
 
 
 class ShopeeSource(SourceConnector):
@@ -133,33 +139,48 @@ class ShopeeSource(SourceConnector):
         limit = min(50, max(10, self.settings.shopee_page_size))
         seen: set[str] = set()
         offers: list[NormalizedOffer] = []
-        for list_type, sort_type, via in LISTS:
+        # Palavras-chave (SHOPEE_KEYWORDS) entram antes da lista por comissão, ordenadas por vendas.
+        plan = [(lt, st, via, None, pages, limit) for lt, st, via in LISTS[:2]]
+        plan += [(0, 2, f"busca:{kw}", kw, 1, KEYWORD_PAGE) for kw in self.settings.shopee_keyword_list]
+        # Termos mais buscados no ML agora: a mesma procura costuma valer na Shopee.
+        own = {kw.lower() for kw in self.settings.shopee_keyword_list}
+        trending = [t for t in load_trends() if t not in own][: self.settings.shopee_trend_keywords]
+        plan += [(0, 2, f"em-alta:{kw}", kw, 1, KEYWORD_PAGE) for kw in trending]
+        plan += [(lt, st, via, None, pages, limit) for lt, st, via in LISTS[2:]]
+        for list_type, sort_type, via, keyword, page_count, size in plan:
             if len(offers) >= cap:
                 break
-            for page in range(1, pages + 1):
+            for page in range(1, page_count + 1):
                 if len(offers) >= cap:
                     break
                 payload = await self.product_offers(
                     page=page,
-                    limit=limit,
+                    limit=size,
+                    keyword=keyword,
                     list_type=list_type,
                     sort_type=sort_type,
                 )
                 batch = self.normalize_products(payload, fetched_at=fetched_at, via=via)
-                if not batch:
-                    break
                 for offer in batch:
-                    if offer.native_product_id in seen:
+                    if offer.native_product_id in seen or not self.meets_quality(offer):
                         continue
                     seen.add(offer.native_product_id)
                     offers.append(offer)
                     if len(offers) >= cap:
                         break
                 info = (((payload.get("data") or {}).get("productOfferV2") or {}).get("pageInfo")) or {}
-                if info.get("hasNextPage") is False:
+                if not batch or info.get("hasNextPage") is False:
                     break
         log.info("shopee_poll", received=len(offers), via="lists")
         return offers[:cap]
+
+    def meets_quality(self, offer: NormalizedOffer) -> bool:
+        """Corta itens com poucas vendas ou nota baixa; sinal ausente não reprova."""
+        if offer.sales_count is not None and offer.sales_count < self.settings.shopee_min_sales:
+            return False
+        if offer.rating and offer.rating < Decimal(str(self.settings.shopee_min_rating)):
+            return False
+        return True
 
     async def product_offers(
         self,
@@ -185,6 +206,17 @@ class ShopeeSource(SourceConnector):
         }
         return await self._graphql(body)
 
+    async def conversion_report(self, *, start: int, end: int, limit: int = 500, scroll_id: str | None = None) -> dict[str, Any]:
+        # Int64 via variáveis é recusado pela API ("wrong type"); argumentos inline funcionam.
+        scroll = f', scrollId: {json.dumps(scroll_id)}' if scroll_id else ""
+        query = (
+            f"{{conversionReport(purchaseTimeStart: {int(start)}, purchaseTimeEnd: {int(end)}, limit: {int(limit)}{scroll}) "
+            "{ nodes { purchaseTime conversionId utmContent orders { orderId orderStatus "
+            "items { itemId itemName actualAmount qty itemTotalCommission } } } "
+            "pageInfo { hasNextPage scrollId } } }"
+        )
+        return await self._graphql({"query": query})
+
     async def campaigns(self, *, page: int, limit: int) -> dict[str, Any]:
         body = {
             "query": CAMPAIGN_QUERY,
@@ -193,11 +225,12 @@ class ShopeeSource(SourceConnector):
         }
         return await self._graphql(body)
 
-    async def generate_short_link(self, origin_url: str) -> str | None:
+    async def generate_short_link(self, origin_url: str, sub_ids: list[str] | None = None) -> str | None:
+        tags = [t for t in (sub_ids or self.settings.shopee_sub_id_list) if t][:5] or ["pricedev"]
         body = {
             "query": SHORT_LINK_MUTATION,
             "operationName": "ShortLink",
-            "variables": {"originUrl": origin_url, "subIds": ["pricedev"]},
+            "variables": {"originUrl": origin_url, "subIds": tags},
         }
         payload = await self._graphql(body)
         data = (payload.get("data") or {}).get("generateShortLink") or {}
@@ -265,6 +298,9 @@ class ShopeeSource(SourceConnector):
         product_link = sanitize_purchase_url(node.get("productLink"))
         announced = node.get("priceDiscountRate")
         announced_pct = money(announced) if announced is not None else None
+        price_max = money(node.get("priceMax"))
+        sales = node.get("sales")
+        rating = money(node.get("ratingStar"))
         shop_id = str(node.get("shopId") or "")
         if self.settings.shopee_official_shops_only:
             shop_type = node.get("shopType")
@@ -294,6 +330,10 @@ class ShopeeSource(SourceConnector):
             affiliate_url=offer_link,
             image_url=sanitize_media_url(node.get("imageUrl")),
             announced_discount_pct=announced_pct,
+            price_max=price_max if price_max and price_max > price else None,
+            sales_count=int(sales) if isinstance(sales, (int, float)) else None,
+            rating=rating if rating and rating > 0 else None,
+            commission_value=money(node.get("commission")),
             identity_confidence=IdentityConfidence.HIGH,
             price_verified=True,
             raw_payload={"itemId": native, "via": via},

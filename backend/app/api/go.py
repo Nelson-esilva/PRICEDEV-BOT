@@ -9,7 +9,7 @@ from app.affiliates.resolver import stamp_owned_link
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, utcnow
 from app.core.logging import get_logger
-from app.models.entities import DealClick, PublishedDeal, PublicPromotion
+from app.models.entities import DealClick, PublishedDeal, PublicPromotion, TrackedLink
 from app.api.public import live_promotions
 from app.storefront.promotions import owned_campaign_link
 from app.storefront.catalog import STORE_LABELS
@@ -63,6 +63,25 @@ async def go_to_promotion(token: str, request: Request,
     except Exception:
         await session.rollback()
     return RedirectResponse(row.destination_url, status_code=302)
+
+
+@router.get("/go/t/{token}")
+async def go_tracked(token: str, request: Request, session: AsyncSession = Depends(get_session)):
+    """Links dos posts do Telegram: registra o clique (canal telegram) e segue para o destino salvo."""
+    link = await session.get(TrackedLink, token)
+    if link is None or not link.destination:
+        return _expired(request)
+    session.add(DealClick(
+        deal_id=link.opportunity_id or link.id, slug=link.id, store=link.store, channel=link.channel,
+        user_agent=(request.headers.get("user-agent") or "")[:256] or None,
+        referer=(request.headers.get("referer") or "")[:512] or None,
+    ))
+    try:
+        await session.commit()
+    except Exception as exc:
+        log.warning("click_log_failed", error=str(exc)[:160])
+        await session.rollback()
+    return RedirectResponse(url=link.destination, status_code=302)
 
 
 @router.get("/go/{token}")

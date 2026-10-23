@@ -116,17 +116,55 @@ async def init_db() -> None:
         await conn.run_sync(_add_missing_columns)
 
 
+PUBLISHED_EXTRAS = {
+    "discount_pct": "NUMERIC(8,2)",
+    "discount_basis": "VARCHAR(32)",
+    "acceptance_score": "INTEGER NOT NULL DEFAULT 0",
+    "price_max": "NUMERIC(14,2)",
+    "sales_count": "INTEGER",
+    "rating": "NUMERIC(3,2)",
+    "best_seller": "BOOLEAN",
+    "free_shipping": "BOOLEAN",
+    "orders_30d": "INTEGER NOT NULL DEFAULT 0",
+    "clicks_7d": "INTEGER NOT NULL DEFAULT 0",
+    "demand_score": "INTEGER NOT NULL DEFAULT 0",
+    "price_condition": "VARCHAR(16)",
+    "regular_price": "NUMERIC(14,2)",
+    "gallery": "JSON",
+    "rank_position": "INTEGER",
+    "rank_category": "VARCHAR(120)",
+    "rank_category_id": "VARCHAR(32)",
+    "trending": "BOOLEAN NOT NULL DEFAULT 0",
+}
+OPPORTUNITY_DEMAND_EXTRAS = {
+    "listed_price": "NUMERIC(14,2)",
+    "price_max": "NUMERIC(14,2)",
+    "sales_count": "INTEGER",
+    "rating": "NUMERIC(3,2)",
+    "commission_value": "NUMERIC(14,2)",
+    "best_seller": "BOOLEAN",
+    "price_condition": "VARCHAR(16)",
+    "regular_price": "NUMERIC(14,2)",
+    "catalog_product_id": "VARCHAR(32)",
+    "gallery": "JSON",
+    "rank_position": "INTEGER",
+    "rank_category": "VARCHAR(120)",
+    "rank_category_id": "VARCHAR(32)",
+    "official_category": "VARCHAR(32)",
+    "enriched_at": "DATETIME",
+}
+
+
 def _add_missing_columns(connection) -> None:
     inspector = inspect(connection)
     if "published_deals" in inspector.get_table_names():
         columns = {col["name"] for col in inspector.get_columns("published_deals")}
-        for name, ddl in {
-            "discount_pct": "NUMERIC(8,2)",
-            "discount_basis": "VARCHAR(32)",
-            "acceptance_score": "INTEGER NOT NULL DEFAULT 0",
-        }.items():
+        for name, ddl in PUBLISHED_EXTRAS.items():
             if name not in columns:
                 connection.execute(text(f"ALTER TABLE published_deals ADD COLUMN {name} {ddl}"))
+    if "deal_clicks" in inspector.get_table_names():
+        if "channel" not in {col["name"] for col in inspector.get_columns("deal_clicks")}:
+            connection.execute(text("ALTER TABLE deal_clicks ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'site'"))
     if "opportunities" not in inspector.get_table_names():
         return
     existing = {col["name"] for col in inspector.get_columns("opportunities")}
@@ -139,6 +177,7 @@ def _add_missing_columns(connection) -> None:
         "free_shipping": "BOOLEAN",
         "comment_count": "INTEGER",
         "announced_discount_pct": "NUMERIC(8,2)",
+        **OPPORTUNITY_DEMAND_EXTRAS,
     }
     for name, ddl in extras.items():
         if name not in existing:

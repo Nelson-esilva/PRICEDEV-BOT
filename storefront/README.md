@@ -31,6 +31,27 @@ Produtos sem evidência de desconto/cupom não entram na vitrine. Comissão não
 é desconto. A validade de produtos deriva da última observação, não da hora
 da renderização. Campanhas genéricas não são aplicadas a produtos automaticamente.
 
+## Ranking por demanda
+
+"Destaques" ordena por `demand_score` (0–100), calculado a cada publicação do catálogo:
+vendas e nota informadas pela loja, desconto, comissão por venda, selo "mais vendido",
+cliques dos últimos 7 dias (site e Telegram) e pedidos dos últimos 30 dias do relatório de
+conversões da Shopee. "Mais vendidos" ordena por pedidos, depois cliques, depois vendas da loja.
+Os links do Telegram só passam pelo `/go/t/...` quando `PUBLIC_SITE_URL` está preenchida.
+
+## Em alta e rankings (API oficial do Mercado Livre)
+
+- **Em alta agora!** (`/em-alta` e seção da home): promoções de qualquer loja cujo título contém um
+  termo mais buscado no ML (`/trends`). Os termos nunca aparecem no site; também viram buscas de
+  ofertas no catálogo do ML e na Shopee, e somam pontos no `demand_score`.
+- **Rankings** (`/rankings`, `/ranking/:id`): posição oficial de mais vendidos por categoria
+  (`/highlights`), só das posições que estão em promoção. Rankings por marca ficam de fora.
+- **Fotos oficiais, frete grátis e categoria**: o job `ml_enrich` completa as ofertas ML com o
+  produto de catálogo (galeria na página da oferta, selo de frete grátis, categoria oficial no lugar
+  da inferência por palavra).
+- **Preço no Pix / com cupom**: lido do selo do card do hub; o card mostra "no Pix" e o valor nos
+  outros meios.
+
 ## Atualização de banco
 
 O startup mantém compatibilidade com os bancos existentes e cria a tabela
@@ -46,4 +67,6 @@ Não executar downgrade em produção sem backup.
 Promobit e Slickdeals: descoberta por ofertas, lojas e categorias. Baymard:
 filtros combináveis e resumo das seleções. W3C: navegação por teclado, foco,
 contraste e movimento reduzido. A implementação usa CSS para as animações,
-sem biblioteca adicional, sem autoplay e sem números promocionais fictícios.
+sem biblioteca adicional e sem números promocionais fictícios. O único autoplay é o carrossel de
+banners da home: pausa com mouse, foco por teclado, aba oculta ou botão, e fica parado com
+"reduzir movimento" ativo no sistema.

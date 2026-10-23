@@ -171,3 +171,18 @@ def test_list_price_reconstructed_from_store_discount():
     assert list_price_of(extreme) is None
     historical = Opportunity(current_price=Decimal("80.00"), historical_discount_pct=Decimal("20"), historical_median=Decimal("100.00"), classification="HISTORICALLY_VALIDATED")
     assert list_price_of(historical) == Decimal("100.00")
+
+
+def test_price_range_never_invents_list_price():
+    from app.models.entities import Opportunity
+    from app.publishing.telegram import format_deal, format_message
+    from app.storefront.catalog import list_price_of
+
+    # Monitor 24"/27": R$ 672 é o de 24", R$ 973 o de 27"; os 53% valem para alguma opção.
+    ranged = Opportunity(current_price=Decimal("672"), price_max=Decimal("973"), announced_discount_pct=Decimal("53"),
+                         classification="ANNOUNCED", product_name="Monitor Curvo 24/27", merchant="shopee")
+    assert list_price_of(ranged) is None
+    text = format_message(ranged, Settings())
+    assert "A PARTIR DE R$ 672" in text and "até R$ 973" in text and "De:" not in text
+    plain = format_deal(title="Mouse", price=Decimal("80"), url="https://x")
+    assert "POR R$ 80" in plain and "A PARTIR" not in plain

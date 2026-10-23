@@ -66,6 +66,9 @@ def _hub_reason_tags(offer: NormalizedOffer) -> list[str]:
     return tags
 
 
+_ALWAYS_REFRESH = frozenset({"price_condition", "regular_price"})
+
+
 def _display_fields(offer: NormalizedOffer) -> dict:
     return {
         "image_url": sanitize_media_url(offer.image_url),
@@ -76,6 +79,21 @@ def _display_fields(offer: NormalizedOffer) -> dict:
         "free_shipping": offer.free_shipping,
         "comment_count": offer.comment_count,
         "announced_discount_pct": offer.announced_discount_pct,
+        "listed_price": offer.listed_price if offer.listed_price and offer.listed_price > offer.effective_price else None,
+        "price_max": offer.price_max if offer.price_max and offer.price_max > offer.effective_price else None,
+        "sales_count": offer.sales_count,
+        "rating": offer.rating,
+        "commission_value": offer.commission_value,
+        "best_seller": offer.best_seller,
+        # Sempre gravados (mesmo None): a condição de Pix/cupom pode deixar de valer.
+        "price_condition": offer.price_condition,
+        "regular_price": offer.regular_price if offer.regular_price and offer.regular_price > offer.effective_price else None,
+        "catalog_product_id": offer.catalog_product_id,
+        "gallery": offer.gallery or None,
+        "rank_position": offer.rank_position,
+        "rank_category": offer.rank_category,
+        "rank_category_id": offer.rank_category_id,
+        "official_category": offer.official_category,
     }
 
 
@@ -125,7 +143,7 @@ async def _refresh_display(
         if opportunity is None:
             return
     for key, value in _display_fields(offer).items():
-        if value is not None:
+        if value is not None or key in _ALWAYS_REFRESH:
             setattr(opportunity, key, value)
     if offer.product_name:
         opportunity.product_name = offer.product_name
@@ -518,5 +536,5 @@ async def _touch_opportunity_risk(
     if offer.product_name:
         opportunity.product_name = offer.product_name
     for key, value in _display_fields(offer).items():
-        if value is not None:
+        if value is not None or key in _ALWAYS_REFRESH:
             setattr(opportunity, key, value)
