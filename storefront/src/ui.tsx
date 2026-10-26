@@ -32,6 +32,10 @@ const paths: Record<string, ReactNode> = {
   activity: <path d="M2 12h5l3-9 4 18 3-9h5"/>,
   gift: <><rect x="3" y="8" width="18" height="4"/><path d="M5 12v9h14v-9M12 8v13"/><path d="M12 8S4 8 5 4s7 4 7 4 6-8 7-4-7 4-7 4Z"/></>,
   chevron: <path d="m9 5 7 7-7 7"/>,
+  menu: <path d="M4 7h16M4 12h16M4 17h16"/>,
+  cart: <><path d="M3 4h2l2.4 11h11l2-8H6.2"/><circle cx="9" cy="19.5" r="1.5"/><circle cx="17" cy="19.5" r="1.5"/></>,
+  wrench: <path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 1-5-5L9 6l-1 4-4 1 2.6-2.6"/>,
+  book: <><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Z"/><path d="M4 19V5M8 7h7"/></>,
   back: <path d="m15 5-7 7 7 7"/>,
   external: <><path d="M14 3h7v7m0-7L10 14"/><path d="M10 3H3v18h18v-7"/></>,
 };
@@ -41,6 +45,10 @@ export function Icon({ name, size = 20, ...props }: { name: string; size?: numbe
 export function Brand({ size = 32 }: { size?: number }) {
   return <span className="brand-lockup"><svg className="brand-mark" width={size} height={size} viewBox="0 0 40 40" aria-hidden="true"><path d="M6 8a4 4 0 0 1 4-4h12.3a4 4 0 0 1 2.8 1.2l10.7 10.7a4 4 0 0 1 0 5.6L23.5 33.8a4 4 0 0 1-5.6 0L7.2 23.1A4 4 0 0 1 6 20.3Z"/><circle cx="14" cy="12" r="2.6"/><path d="m17.5 19.5-3 3 3 3m6-6 3 3-3 3"/></svg><span className="brand-word">Promo<b>Dev</b></span></span>;
 }
+// Logo do Telegram (preenchido; o Icon é só traço).
+export function TelegramIcon({ size = 24, className }: { size?: number; className?: string }) {
+  return <svg className={className} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M21.5 4.2 2.9 11.4c-1.3.5-1.3 1.2-.2 1.6l4.8 1.5 1.8 5.6c.2.6.4.8.9.8.4 0 .6-.2.9-.5l2.3-2.2 4.7 3.5c.9.5 1.5.2 1.7-.8L22.9 5.6c.3-1.3-.5-1.9-1.4-1.4ZM8.6 14.1l9.9-6.2c.5-.3.9-.1.5.2l-8.1 7.3-.3 3.4-2-4.7Z"/></svg>;
+}
 export function StoreTag({ store, extra }: { store: string; extra?: string }) {
   return <span className="store-tag"><i className={`store-dot ${store}`}/>{storeLabel(store)}{extra && <> · {extra}</>}</span>;
 }
@@ -48,8 +56,8 @@ export function useTitle(title: string) { useEffect(() => {
   document.title = `${title} · PromoDev`;
   document.querySelector('meta[name="description"]')?.setAttribute('content', `${title}. Explore ofertas, campanhas e cupons no PromoDev e confira as condições na loja de origem.`);
 }, [title]); }
-export function useRemote<T>(path: string | null) {
-  const [state, setState] = useState<{ data: T | null; error: string; loading: boolean }>({ data: null, error: '', loading: true });
+export function useRemote<T>(path: string | null, initial: T | null = null) {
+  const [state, setState] = useState<{ data: T | null; error: string; loading: boolean }>({ data: initial, error: '', loading: true });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!path) { setState({ data: null, error: '', loading: false }); return; }
@@ -63,6 +71,17 @@ export function useRemote<T>(path: string | null) {
   return { ...state, retry: () => setAttempt(n => n + 1) };
 }
 const SavedContext = createContext<{ saved: PublicDeal[]; toggle: (d: PublicDeal) => void }>({ saved: [], toggle: () => {} });
+// Vistos recentemente: só ids no navegador; a home busca preço e disponibilidade atuais.
+const RECENT_KEY = 'promodev-recent-v1';
+export function recordView(id: string) {
+  try {
+    const old: string[] = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...(Array.isArray(old) ? old : []).filter(x => x !== id)].slice(0, 24)));
+  } catch { /* sem armazenamento: a linha só não aparece */ }
+}
+export function recentIds(): string[] {
+  try { const value = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); return Array.isArray(value) ? value.filter(x => typeof x === 'string') : []; } catch { return []; }
+}
 export function SavedProvider({ children }: { children: ReactNode }) {
   const [saved, setSaved] = useState<PublicDeal[]>(() => {
     try { const value = JSON.parse(localStorage.getItem('promodev-saved-v1') || '[]'); return Array.isArray(value) ? value.filter(d => d?.id && d?.slug).slice(0, 100) : []; } catch { return []; }

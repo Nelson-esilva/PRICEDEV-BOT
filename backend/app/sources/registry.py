@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.core.config import Settings
 from app.sources.base import SourceConnector
+from app.sources.community import CommunitySource
 from app.sources.lomadee import LomadeeSource
 from app.sources.magalu import MagaluSource
 from app.sources.mercadolivre import MercadoLivreSource
@@ -22,4 +23,5 @@ def build_connectors(settings: Settings) -> list[SourceConnector]:
         ShopeeSource(settings),
         LomadeeSource(settings),
         WatchlistSource(settings),
+        CommunitySource(settings),
     ]

@@ -186,3 +186,15 @@ def test_price_range_never_invents_list_price():
     assert "A PARTIR DE R$ 672" in text and "até R$ 973" in text and "De:" not in text
     plain = format_deal(title="Mouse", price=Decimal("80"), url="https://x")
     assert "POR R$ 80" in plain and "A PARTIR" not in plain
+
+
+def test_category_from_product_noun_not_accessory_words():
+    from app.storefront.taxonomy import category_of
+
+    assert category_of("Controle Sem Fio Joystick Bluetooth Compatível com celular", "Games") == "games"
+    assert category_of("Mochila para Notebook 15.6 Executiva", "hub") == "moda"
+    assert category_of("Cadeira Gamer Lancer Preta", "hub") == "informatica"
+    assert category_of("Lanterna Militar Tática Led", "hub", "moda") == "casa"
+    assert category_of("Kit Organizador Sem Palavra Conhecida", "Calçados, Roupas e Bolsas", "moda") == "casa"
+    assert category_of("Produto Genérico XPTO", "Calçados, Roupas e Bolsas", None) == "moda"
+    assert category_of("Produto Genérico XPTO", "hub", "pets") == "pets"

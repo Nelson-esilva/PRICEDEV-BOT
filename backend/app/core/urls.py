@@ -20,6 +20,9 @@ def _sanitize(url: str | None, *, allow_pelando_media: bool) -> str | None:
     raw = url.strip()
     if not raw:
         return None
+    # Foto de grupo servida pela API pública (nome validado na rota).
+    if raw.startswith("/api/public/v1/media/") and "/" not in raw[len("/api/public/v1/media/"):]:
+        return raw
     parsed = urlparse(raw)
     if parsed.scheme.lower() not in ALLOWED_SCHEMES:
         return None

@@ -22,6 +22,7 @@ from app.core.logging import configure_logging, get_logger
 from app.inbox import run_telegram_inbox
 from app.monitoring.retention import run_retention
 from app.monitoring.scheduler import run_scheduler
+from app.storefront.clicks import run_click_flusher
 
 
 @asynccontextmanager
@@ -33,7 +34,8 @@ async def lifespan(_app: FastAPI):
         await run_retention(settings)
     except Exception as exc:
         get_logger("app").exception("retention_startup_failed", error=str(exc))
-    tasks: list[asyncio.Task] = []
+    # Cliques do /go são gravados em lote fora da requisição (ver app/storefront/clicks.py).
+    tasks: list[asyncio.Task] = [asyncio.create_task(run_click_flusher())]
     if settings.enable_scheduler:
         tasks.append(asyncio.create_task(run_scheduler(settings)))
     if settings.enable_channel_inbox:

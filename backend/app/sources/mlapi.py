@@ -30,7 +30,16 @@ TOKEN_FILE = Path(__file__).resolve().parents[2] / "data" / "ml_oauth.json"
 
 _lock = asyncio.Lock()
 _access: dict[str, Any] = {"token": None, "expires_at": None}
-_bucket = TokenBucket(4.0)
+# Compartilhado por coletor e enriquecimento: 4/s gerava 429 do ML com os dois rodando.
+_bucket = TokenBucket(2.0)
+RETRIES_429 = 3
+
+
+class RateLimited(SourceError):
+    """429 do ML que persistiu depois das novas tentativas."""
+
+    def __init__(self) -> None:
+        super().__init__("ML API 429", retryable=True)
 
 
 def ml_api_enabled(settings: Settings) -> bool:
@@ -55,14 +64,23 @@ class MlApi:
 
     async def get(self, path: str) -> Any:
         """JSON da rota, ou None quando a API nega/não encontra (403/404 são normais para terceiros)."""
-        token = await self.token()
-        await _bucket.acquire()
-        response = await self._http().get(f"{API}{path}", headers={"Authorization": f"Bearer {token}"})
+        for attempt in range(RETRIES_429 + 1):
+            token = await self.token()
+            await _bucket.acquire()
+            response = await self._http().get(f"{API}{path}", headers={"Authorization": f"Bearer {token}"})
+            if response.status_code != 429:
+                break
+            if attempt == RETRIES_429:
+                raise RateLimited()
+            # Espera o que o ML pedir (Retry-After), senão 2, 4, 8 s.
+            try:
+                wait = float(response.headers.get("retry-after") or 0)
+            except ValueError:
+                wait = 0
+            await asyncio.sleep(min(30.0, wait or 2.0 * 2**attempt))
         if response.status_code == 401:
             _access["token"] = None
             raise SourceError("ML API 401: token expirado", retryable=True)
-        if response.status_code == 429:
-            raise SourceError("ML API 429", retryable=True)
         if response.status_code >= 500:
             raise SourceError(f"ML API {response.status_code}", retryable=True)
         if response.status_code != 200:

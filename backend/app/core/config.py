@@ -158,11 +158,18 @@ class Settings(BaseSettings):
     )
     storefront_publish_seconds: int = 120
     storefront_deal_ttl_hours: int = 36
+    # Promoções dos grupos (inbox) para lojas sem API: entram no site com a loja como fonte.
+    enable_community_deals: bool = True
+    community_stores: str = "amazon,kabum"
+    community_ttl_hours: int = 12
+    community_poll_seconds: int = 300
     storefront_retention_days: int = 14
     click_log_retention_days: int = 90
     storefront_min_score: int = 0
     # URL pública do site (ex.: https://promodev.com.br). Com ela, os links do Telegram passam pelo /go e viram cliques medidos.
     public_site_url: str = ""
+    # Link público do grupo/canal no Telegram (t.me/...): botões "Entrar no grupo" do site. Vazio = ocultos.
+    public_telegram_url: str = ""
 
     score_weight_historical_discount: int = 30
     score_weight_history_quality: int = 20
@@ -182,6 +189,10 @@ class Settings(BaseSettings):
     @property
     def ml_official_category_list(self) -> list[str]:
         return [c.strip().upper() for c in self.ml_official_categories.split(",") if c.strip()]
+
+    @property
+    def community_store_list(self) -> list[str]:
+        return [s.strip().lower() for s in self.community_stores.split(",") if s.strip()]
 
     @property
     def ml_ranking_term_list(self) -> list[str]:

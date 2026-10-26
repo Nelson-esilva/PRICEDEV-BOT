@@ -9,10 +9,11 @@ from app.affiliates.resolver import stamp_owned_link
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, utcnow
 from app.core.logging import get_logger
-from app.models.entities import DealClick, PublishedDeal, PublicPromotion, TrackedLink
+from app.models.entities import PublishedDeal, PublicPromotion, TrackedLink
 from app.api.public import live_promotions
 from app.storefront.promotions import owned_campaign_link
 from app.storefront.catalog import STORE_LABELS
+from app.storefront.clicks import record_click
 
 router = APIRouter()
 log = get_logger("go")
@@ -44,6 +45,13 @@ _EXPIRED_HTML = """<!doctype html>
 """
 
 
+def _visitor(request: Request) -> dict:
+    return {
+        "user_agent": (request.headers.get("user-agent") or "")[:256] or None,
+        "referer": (request.headers.get("referer") or "")[:512] or None,
+    }
+
+
 def _expired(request: Request) -> HTMLResponse:
     return HTMLResponse(_EXPIRED_HTML.format(home="/"), status_code=410)
 
@@ -55,13 +63,7 @@ async def go_to_promotion(token: str, request: Request,
         *live_promotions(utcnow()), PublicPromotion.slug == token))).scalar_one_or_none()
     if row is None or not owned_campaign_link(row.destination_url, row.store, settings):
         return _expired(request)
-    session.add(DealClick(deal_id=row.id, slug=row.slug, store=row.store,
-        user_agent=(request.headers.get('user-agent') or '')[:256] or None,
-        referer=(request.headers.get('referer') or '')[:512] or None))
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
+    record_click(deal_id=row.id, slug=row.slug, store=row.store, **_visitor(request))
     return RedirectResponse(row.destination_url, status_code=302)
 
 
@@ -71,16 +73,7 @@ async def go_tracked(token: str, request: Request, session: AsyncSession = Depen
     link = await session.get(TrackedLink, token)
     if link is None or not link.destination:
         return _expired(request)
-    session.add(DealClick(
-        deal_id=link.opportunity_id or link.id, slug=link.id, store=link.store, channel=link.channel,
-        user_agent=(request.headers.get("user-agent") or "")[:256] or None,
-        referer=(request.headers.get("referer") or "")[:512] or None,
-    ))
-    try:
-        await session.commit()
-    except Exception as exc:
-        log.warning("click_log_failed", error=str(exc)[:160])
-        await session.rollback()
+    record_click(deal_id=link.opportunity_id or link.id, slug=link.id, store=link.store, channel=link.channel, **_visitor(request))
     return RedirectResponse(url=link.destination, status_code=302)
 
 
@@ -102,19 +95,5 @@ async def go_to_store(
     destination = stamp_owned_link(deal.destination_url, settings) or deal.destination_url
     if not destination:
         return _expired(request)
-    session.add(
-        DealClick(
-            deal_id=deal.id,
-            slug=deal.slug,
-            store=deal.store or STORE_LABELS.get(deal.store, ""),
-            user_agent=(request.headers.get("user-agent") or "")[:256] or None,
-            referer=(request.headers.get("referer") or "")[:512] or None,
-            clicked_at=now,
-        )
-    )
-    try:
-        await session.commit()
-    except Exception as exc:
-        log.warning("click_log_failed", error=str(exc)[:160])
-        await session.rollback()
+    record_click(deal_id=deal.id, slug=deal.slug, store=deal.store or STORE_LABELS.get(deal.store, ""), clicked_at=now, **_visitor(request))
     return RedirectResponse(url=destination, status_code=302)

@@ -17,7 +17,7 @@ from app.models.entities import Opportunity, Product
 from app.schemas.normalized import IdentityConfidence, NormalizedOffer
 from app.sources.base import SourceConnector
 from app.sources.mercadolivre import _discount
-from app.sources.mlapi import MlApi, ml_api_enabled
+from app.sources.mlapi import MlApi, RateLimited, ml_api_enabled
 from app.storefront.taxonomy import ML_ROOT_KEYS
 from app.storefront.trends import save_trends
 
@@ -98,21 +98,26 @@ class MlOfficialSource(SourceConnector):
             if replace:
                 offers[offer.native_product_id] = offer
 
-        for category_id, label in await self._ranking_categories():
-            ranking = await self.api.get(f"/highlights/MLB/category/{category_id}") or {}
-            entries = [e for e in ranking.get("content") or [] if isinstance(e, dict) and e.get("type") == "PRODUCT"]
-            for entry in entries[: self.settings.ml_official_per_category]:
-                keep(await self._product_offer(
-                    str(entry.get("id") or ""), fetched_at,
-                    rank=(entry.get("position"), category_id, label),
-                ))
+        # Termos em alta primeiro: poucas chamadas, e o site depende deles mesmo se o resto falhar.
         terms = await self._trends()
-        for term in terms[: self.settings.ml_trend_search_terms]:
-            found = await self.api.get(f"/products/search?status=active&site_id=MLB&q={quote(term)}&limit=5") or {}
-            for product in found.get("results") or []:
-                if isinstance(product, dict) and product.get("id"):
-                    self._products.setdefault(str(product["id"]), product)
-                    keep(await self._product_offer(str(product["id"]), fetched_at))
+        try:
+            for term in terms[: self.settings.ml_trend_search_terms]:
+                found = await self.api.get(f"/products/search?status=active&site_id=MLB&q={quote(term)}&limit=5") or {}
+                for product in found.get("results") or []:
+                    if isinstance(product, dict) and product.get("id"):
+                        self._products.setdefault(str(product["id"]), product)
+                        keep(await self._product_offer(str(product["id"]), fetched_at))
+            for category_id, label in await self._ranking_categories():
+                ranking = await self.api.get(f"/highlights/MLB/category/{category_id}") or {}
+                entries = [e for e in ranking.get("content") or [] if isinstance(e, dict) and e.get("type") == "PRODUCT"]
+                for entry in entries[: self.settings.ml_official_per_category]:
+                    keep(await self._product_offer(
+                        str(entry.get("id") or ""), fetched_at,
+                        rank=(entry.get("position"), category_id, label),
+                    ))
+        except RateLimited:
+            # Limite do ML mesmo após as novas tentativas: fica o que já veio; o resto no próximo ciclo.
+            log.warning("mlofficial_partial", received=len(offers), reason="429")
         log.info("mlofficial_poll", received=len(offers), skipped_hub=len(skip), trends=len(terms))
         return list(offers.values())
 

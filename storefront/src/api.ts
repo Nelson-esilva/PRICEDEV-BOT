@@ -16,11 +16,15 @@ export type Promotion = {
 };
 export type List<T> = { items: T[]; total: number };
 export type Ranking = { id: string; label: string; count: number; image_url: string | null; top: string };
-export type HomeData = { featured: List<PublicDeal>; trending?: List<PublicDeal>; bestsellers?: List<PublicDeal>; discounts: List<PublicDeal>; campaigns: List<Promotion>; coupons: List<Promotion> };
+export type SiteInfo = { telegram_url: string | null; stores: { id: string; label: string; count: number }[] };
+export type HomeRanking = Ranking & { items: PublicDeal[] };
+export type HomeData = { featured: List<PublicDeal>; trending?: List<PublicDeal>; pix?: List<PublicDeal>; cheap?: List<PublicDeal>;
+  free_shipping?: List<PublicDeal>; recent?: List<PublicDeal>; loved?: List<PublicDeal>; under100?: List<PublicDeal>; premium?: List<PublicDeal>; ranking?: HomeRanking | null; telegram_url?: string | null; bestsellers?: List<PublicDeal>; discounts: List<PublicDeal>; campaigns: List<Promotion>; coupons: List<Promotion> };
 export const STORE_OPTIONS = [
   { id: 'shopee', label: 'Shopee', mark: 'S', caption: 'Achadinhos para o dia a dia' },
   { id: 'mercadolivre', label: 'Mercado Livre', mark: 'ML', caption: 'Tecnologia, casa e muito mais' },
-  { id: 'kabum', label: 'KaBuM!', mark: 'K!', caption: 'Campanhas e cupons para seu setup' },
+  { id: 'kabum', label: 'KaBuM!', mark: 'K!', caption: 'Hardware, games e cupons para seu setup' },
+  { id: 'amazon', label: 'Amazon', mark: 'a', caption: 'Casa, mercado, eletrônicos e mais' },
 ];
 export const CATEGORIES = [
   { id: 'eletronicos', label: 'Eletrônicos', icon: 'headphones' },
@@ -33,21 +37,10 @@ export const CATEGORIES = [
   { id: 'esportes', label: 'Esportes', icon: 'activity' },
   { id: 'infantil', label: 'Infantil', icon: 'gift' },
   { id: 'pets', label: 'Pets', icon: 'heart' },
+  { id: 'mercado', label: 'Mercado', icon: 'cart' },
+  { id: 'ferramentas', label: 'Ferramentas & auto', icon: 'wrench' },
+  { id: 'livros', label: 'Livros & papelaria', icon: 'book' },
 ];
-// Atalhos do menu de categorias: rótulo → busca dentro da categoria (palavras da taxonomia do backend).
-export const CATEGORY_LINKS: Record<string, [string, string][]> = {
-  eletronicos: [['Fones de ouvido', 'fone'], ['Caixas de som', 'caixa de som'], ['Smartwatches', 'smartwatch'], ['Smart TVs', 'smart tv'], ['Headsets', 'headset'], ['Câmeras', 'câmera']],
-  informatica: [['Notebooks', 'notebook'], ['Monitores', 'monitor'], ['SSD', 'ssd'], ['Teclados', 'teclado'], ['Mouses', 'mouse'], ['Gabinetes', 'gabinete']],
-  celulares: [['Smartphones', 'smartphone'], ['iPhone', 'iphone'], ['Galaxy', 'galaxy'], ['Tablets', 'tablet'], ['Capinhas', 'capa']],
-  casa: [['Air fryers', 'air fryer'], ['Panelas', 'panela'], ['Cafeteiras', 'cafeteira'], ['Aspiradores', 'aspirador'], ['Ventiladores', 'ventilador'], ['Roupa de cama', 'lençol']],
-  moda: [['Tênis', 'tênis'], ['Camisas', 'camisa'], ['Calças', 'calça'], ['Bolsas', 'bolsa'], ['Vestidos', 'vestido'], ['Sandálias', 'sandália']],
-  beleza: [['Perfumes', 'perfume'], ['Maquiagem', 'maquiagem'], ['Shampoos', 'shampoo'], ['Cremes', 'creme'], ['Sérums', 'sérum'], ['Desodorantes', 'desodorante']],
-  games: [['PlayStation', 'playstation'], ['Xbox', 'xbox'], ['Nintendo', 'nintendo'], ['Consoles', 'console'], ['Controles', 'controle'], ['Jogos', 'jogo']],
-  esportes: [['Bicicletas', 'bicicleta'], ['Suplementos', 'whey'], ['Halteres', 'halter'], ['Academia', 'academia'], ['Fitness', 'fitness']],
-  infantil: [['Brinquedos', 'brinquedo'], ['LEGO', 'lego'], ['Fraldas', 'fralda'], ['Bebê', 'bebê']],
-  pets: [['Cachorros', 'cachorro'], ['Gatos', 'gato'], ['Ração', 'ração']],
-};
-export const PRICE_LINKS: [string, string][] = [['Até R$ 50', 'max_price=50'], ['R$ 50 a R$ 200', 'min_price=50&max_price=200'], ['Acima de R$ 200', 'min_price=200'], ['30% OFF ou mais', 'min_discount=30'], ['Com cupom', 'has_coupon=true']];
 export function storeLabel(store: string) { return STORE_OPTIONS.find(s => s.id === store)?.label || store; }
 export function buyLabel(store: string) { return `Ver na ${storeLabel(store)}`; }
 export function money(value: number | null | undefined) { return value == null ? '' : value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
@@ -77,10 +70,24 @@ export function hasDeadline(iso: string | null) { return !!iso && new Date(iso).
 export function queryString(values: Record<string, string | number | boolean | undefined | null>) {
   const params = new URLSearchParams(); Object.entries(values).forEach(([k, v]) => { if (v != null && v !== '') params.set(k, String(v)); }); return params.toString();
 }
+// Ofertas que já vieram em alguma lista: a página do produto abre com elas na hora,
+// e a versão atualizada chega em segundo plano.
+const seenDeals = new Map<string, PublicDeal>();
+export function cachedDeal(slug: string) { return seenDeals.get(slug) || null; }
+function remember(value: unknown, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 3) return;
+  if (Array.isArray(value)) { value.forEach(item => remember(item, depth + 1)); return; }
+  const record = value as Record<string, unknown>;
+  if (typeof record.slug === 'string' && typeof record.go_path === 'string' && 'current_price' in record) {
+    if (seenDeals.size > 2000) seenDeals.clear();
+    seenDeals.set(record.slug, record as unknown as PublicDeal); return;
+  }
+  Object.values(record).forEach(item => remember(item, depth + 1));
+}
 export async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/api/public/v1${path}`, { signal });
   if (!response.ok) throw new Error(response.status === 404 ? 'Esta oferta não está mais disponível.' : 'Não foi possível carregar agora. Tente novamente.');
-  return response.json();
+  const data = await response.json(); remember(data); return data;
 }
 export function fetchDeals(opts: Record<string, string | number | boolean | undefined> = {}) { return request<List<PublicDeal>>(`/deals?${queryString(opts)}`); }
 export async function fetchDeal(slug: string) { try { return await request<PublicDeal>(`/deals/${encodeURIComponent(slug)}`); } catch { return null; } }

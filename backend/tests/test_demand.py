@@ -101,6 +101,10 @@ async def test_tracked_link_redirects_and_logs_telegram_click(client, test_setti
     hit = await client.get("/go/t/abc123", follow_redirects=False)
     assert hit.status_code == 302 and hit.headers["location"] == "https://s.shopee.com.br/x"
     assert (await client.get("/go/t/nope", follow_redirects=False)).status_code == 410
+    from app.storefront.clicks import flush_clicks
+
+    # O clique vai para a fila; o redirecionamento não espera o banco.
+    assert await flush_clicks() == 1
     async with factory() as session:
         click = (await session.execute(select(DealClick))).scalars().one()
     assert click.channel == "telegram" and click.deal_id == "opp1"
@@ -118,3 +122,38 @@ async def test_telegram_message_uses_tracked_link_only_with_public_url(db, test_
     assert link and link.startswith("https://promodev.example/go/t/")
     token = link.rsplit("/", 1)[1]
     assert (await db.get(TrackedLink, token)).destination == "https://s.shopee.com.br/y"
+
+
+async def test_redirect_does_not_wait_for_locked_database(client, test_settings: Settings):
+    """Com o banco travado por outra escrita, o /go redireciona na hora e o clique fica na fila."""
+    import time
+
+    from app.storefront import clicks
+
+    factory = get_session_factory()
+    async with factory() as session:
+        session.add(TrackedLink(id="lock1", destination="https://s.shopee.com.br/z", opportunity_id="opp2", store="shopee"))
+        await session.commit()
+    async with factory() as writer:
+        writer.add(TrackedLink(id="holder", destination="https://x", store="shopee"))
+        await writer.flush()  # segura a trava de escrita do SQLite
+        started = time.monotonic()
+        hit = await client.get("/go/t/lock1", follow_redirects=False)
+        assert hit.status_code == 302 and time.monotonic() - started < 2
+        await writer.rollback()
+    assert await clicks.flush_clicks() == 1
+
+
+async def test_discount_showcase_skips_price_ranges_and_inflated_discounts(client, test_settings: Settings):
+    from decimal import Decimal
+
+    factory = await _publish_two(test_settings, utcnow())
+    async with factory() as session:
+        await publish_public_catalog(test_settings, session=session)
+        rows = (await session.execute(select(PublishedDeal))).scalars().all()
+        rows[0].announced_discount_pct = rows[0].discount_pct = Decimal("96")
+        rows[1].discount_pct = Decimal("40")
+        rows[1].price_max = Decimal("999")
+        await session.commit()
+    items = (await client.get("/api/public/v1/deals?sort=discount")).json()["items"]
+    assert items == []

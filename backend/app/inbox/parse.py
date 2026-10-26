@@ -259,6 +259,9 @@ def _is_skip(line: str) -> bool:
         return True
     if "link do produto" in low or "link app" in low:
         return True
+    # Instruções de compra ("⚠️ desconto aplicado na finalização da compra") não são o produto.
+    if re.search(r"desconto (aplicado|no carrinho|na finaliza)|aplicado no carrinho|programe e poupe", low):
+        return True
     return False
 
 

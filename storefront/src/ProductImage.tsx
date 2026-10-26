@@ -1,5 +1,10 @@
-import { useState } from "react";
+import { useState, type SyntheticEvent } from "react";
 import { Icon } from "./ui";
+
+// A foto aparece suave quando termina de baixar, em vez de "pipocar" na tela.
+export function revealImage(event: SyntheticEvent<HTMLImageElement>) {
+  event.currentTarget.classList.add("is-loaded");
+}
 
 export default function ProductImage({
   src,
@@ -27,6 +32,8 @@ export default function ProductImage({
       alt={name}
       loading={eager ? "eager" : "lazy"}
       decoding="async"
+      className="fade-img"
+      onLoad={revealImage}
       onError={() => setFailedSource(src)}
     />
   );

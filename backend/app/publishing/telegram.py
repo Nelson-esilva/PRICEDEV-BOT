@@ -791,6 +791,8 @@ async def publish_opportunity(session, opp: Opportunity, settings: Settings, *, 
     if not photo:
         return "no_image"
     tracked = await create_tracked_link(session, link, opp, settings)
+    # Libera o SQLite antes da rede (Telegram): com a escrita pendente, cliques e jobs esperariam o envio.
+    await session.commit()
     body = format_message(opp, settings, href=tracked)
     if not await _claim_publication(keys, str(opp.id), body, since=since):
         return "duplicate"

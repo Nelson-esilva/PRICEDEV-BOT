@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -151,11 +153,7 @@ async def _refresh_display(
     opportunity.fetched_at = offer.fetched_at or at
     opportunity.ingested_at = at
     if offer.purchase_url:
-        links = await resolve_links(
-            original_url=offer.purchase_url,
-            existing_affiliate=offer.affiliate_url,
-            settings=settings,
-        )
+        links = await _links_for(offer, settings)
         opportunity.original_purchase_url = links.original
         opportunity.validated_purchase_url = links.validated
         opportunity.affiliate_url = links.affiliate
@@ -188,6 +186,39 @@ def _effective(offer: NormalizedOffer) -> Decimal:
     return quantized
 
 
+# Links já resolvidos nesta ingestão, por (url de compra, url de afiliado) sanitizadas.
+_resolved: ContextVar[dict | None] = ContextVar("resolved_links", default=None)
+# Ofertas gravadas por transação: o SQLite tem um escritor só; transação curta = clique e
+# enriquecimento não esperam a coleta inteira.
+COMMIT_EVERY = 25
+
+
+def _link_key(offer: NormalizedOffer) -> tuple[str | None, str | None]:
+    return sanitize_purchase_url(offer.purchase_url), sanitize_purchase_url(offer.affiliate_url)
+
+
+async def _links_for(offer: NormalizedOffer, settings: Settings):
+    cache = _resolved.get()
+    key = _link_key(offer)
+    if cache is not None and key in cache:
+        return cache[key]
+    return await resolve_links(original_url=offer.purchase_url, existing_affiliate=offer.affiliate_url, settings=settings)
+
+
+async def _preresolve(offers: list[NormalizedOffer], settings: Settings) -> dict:
+    """Resolve links (rede: redirecionamentos, link curto da Shopee) antes de abrir escrita no banco."""
+    cache: dict = {}
+    for offer in offers:
+        key = _link_key(offer)
+        if not key[0] or key in cache:
+            continue
+        try:
+            cache[key] = await resolve_links(original_url=key[0], existing_affiliate=key[1], settings=settings)
+        except Exception as exc:
+            log.warning("preresolve_failed", source=offer.source, error=str(exc)[:160])
+    return cache
+
+
 async def ingest_offers(
     session: AsyncSession,
     offers: list[NormalizedOffer],
@@ -198,7 +229,19 @@ async def ingest_offers(
     moment = now or utcnow()
     result = IngestionResult()
     total = len(offers)
+    token = _resolved.set(await _preresolve(offers, settings))
+    try:
+        await _ingest_all(session, offers, settings, moment, total, result)
+    finally:
+        _resolved.reset(token)
+    await session.commit()
+    return result
+
+
+async def _ingest_all(session, offers, settings, moment, total, result) -> None:
     for index, offer in enumerate(offers):
+        if index and index % COMMIT_EVERY == 0:
+            await session.commit()
         stamp = moment + timedelta(microseconds=total - index)
         result.received += 1
         try:
@@ -224,8 +267,6 @@ async def ingest_offers(
             result.historically_validated += 1
         elif opportunity.classification == Classification.REJECTED:
             result.rejected += 1
-    await session.commit()
-    return result
 
 
 async def _ingest_one(
@@ -433,11 +474,7 @@ async def _ingest_one(
     extra_reasons.extend(_hub_reason_tags(offer))
     engine.reasons.extend(extra_reasons)
     engine.risks.extend(extra_risks)
-    links = await resolve_links(
-        original_url=offer.purchase_url,
-        existing_affiliate=offer.affiliate_url,
-        settings=settings,
-    )
+    links = await _links_for(offer, settings)
     analyzed_at = utcnow()
     confirmed_at = analyzed_at if engine.confirmed else None
 

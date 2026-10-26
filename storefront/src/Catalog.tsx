@@ -6,7 +6,7 @@ import DealCard from './DealCard';
 import { PromotionCard } from './Promotions';
 
 const PAGE_SIZE = 24;
-const FILTER_KEYS = ['store', 'category', 'min_price', 'max_price', 'min_discount', 'has_coupon'];
+const FILTER_KEYS = ['store', 'category', 'min_price', 'max_price', 'min_discount', 'has_coupon', 'pix', 'free_shipping'];
 export default function Catalog() {
   const route = useParams(); const location = useLocation(); const [params, setParams] = useSearchParams();
   const discountPage = location.pathname === '/maiores-descontos'; const trendingPage = location.pathname === '/em-alta'; const q = params.get('q') || '';
@@ -14,9 +14,9 @@ export default function Catalog() {
   const sort = params.get('sort') || (discountPage ? 'discount' : 'featured');
   const page = Math.max(1, Number(params.get('page')) || 1); const dialog = useRef<HTMLDialogElement>(null);
   const categoryLabel = CATEGORIES.find(c => c.id === category)?.label;
-  const title = q ? `Resultados para “${q}”` : route.store ? storeLabel(store) : categoryLabel ? categoryLabel : discountPage ? 'Maiores descontos' : trendingPage ? 'Em alta agora!' : location.pathname === '/busca' ? 'Busca' : 'Todas as ofertas';
+  const title = q ? `Resultados para “${q}”` : route.store ? storeLabel(store) : categoryLabel ? categoryLabel : discountPage ? 'Maiores descontos' : trendingPage ? 'Em alta agora!' : params.get('pix') ? 'Ofertas no Pix' : params.get('min_rating') ? 'Queridinhos: nota 4,7+' : params.get('min_price') === '1000' && !params.get('max_price') ? 'Ofertas de alto valor' : params.get('max_price') === '100' && !params.get('min_price') ? 'Achados até R$ 100' : params.get('free_shipping') ? 'Frete grátis' : location.pathname === '/busca' ? 'Busca' : 'Todas as ofertas';
   useTitle(q ? `Busca: ${q}` : title);
-  const state = useRemote<List<PublicDeal>>(`/deals?${queryString({ q, category, store, sort, min_price: params.get('min_price'), max_price: params.get('max_price'), min_discount: params.get('min_discount'), has_coupon: params.get('has_coupon'), trending: trendingPage ? 'true' : null, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })}`);
+  const state = useRemote<List<PublicDeal>>(`/deals?${queryString({ q, category, store, sort, min_price: params.get('min_price'), max_price: params.get('max_price'), min_discount: params.get('min_discount'), has_coupon: params.get('has_coupon'), pix: params.get('pix'), free_shipping: params.get('free_shipping'), min_rating: params.get('min_rating'), min_sales: params.get('min_sales'), trending: trendingPage ? 'true' : null, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })}`);
   const few = !!state.data && state.data.total < 5 && page === 1;
   const suggestions = useRemote<List<PublicDeal>>(few ? `/deals?${queryString({ category: route.category, store: route.store, sort: 'featured', limit: 12 })}` : null);
   const shown = new Set(state.data?.items.map(d => d.id)); const extra = suggestions.data?.items.filter(d => !shown.has(d.id)).slice(0, 8) || [];
@@ -41,13 +41,15 @@ export default function Catalog() {
       <fieldset><legend>Preço</legend><div className="price-inputs"><label>De R$<input type="number" min="0" step="0.01" name="min_price" placeholder="0" defaultValue={params.get('min_price') || ''}/></label><label>Até R$<input type="number" min="0" step="0.01" name="max_price" placeholder="Máx." defaultValue={params.get('max_price') || ''}/></label></div></fieldset>
       <fieldset><legend>Desconto mínimo</legend><div className="pill-options">{['', '10', '20', '30', '50'].map(n => <label key={n}><input type="radio" name="min_discount" value={n} defaultChecked={minDiscount === n}/><span>{n ? `${n}%` : 'Qualquer'}</span></label>)}</div></fieldset>
       <label className="checkbox"><input type="checkbox" name="has_coupon" value="true" defaultChecked={params.get('has_coupon') === 'true'}/>Somente com cupom</label>
+      <label className="checkbox"><input type="checkbox" name="pix" value="true" defaultChecked={params.get('pix') === 'true'}/>Preço no Pix</label>
+      <label className="checkbox"><input type="checkbox" name="free_shipping" value="true" defaultChecked={params.get('free_shipping') === 'true'}/>Frete grátis</label>
       <button className="button primary" type="submit">Aplicar filtros</button>
       <p className="filter-note">O percentual pode vir da loja ou do nosso histórico de preços. Cada oferta indica a origem.</p></form>;
   }
-  function chipLabel(k: string, v: string) { return k === 'store' ? storeLabel(v) : k === 'category' ? CATEGORIES.find(c => c.id === v)?.label || v : k === 'min_price' ? `A partir de R$ ${v}` : k === 'max_price' ? `Até R$ ${v}` : k === 'min_discount' ? `Desconto ≥ ${v}%` : 'Com cupom'; }
+  function chipLabel(k: string, v: string) { return k === 'store' ? storeLabel(v) : k === 'category' ? CATEGORIES.find(c => c.id === v)?.label || v : k === 'min_price' ? `A partir de R$ ${v}` : k === 'max_price' ? `Até R$ ${v}` : k === 'min_discount' ? `Desconto ≥ ${v}%` : k === 'pix' ? 'No Pix' : k === 'free_shipping' ? 'Frete grátis' : 'Com cupom'; }
   const kabum = route.store === 'kabum';
   return <div className="container page-space"><Breadcrumb items={[[q ? 'Busca' : title]]}/>
-    <PageHeading title={title} text={kabum ? 'Campanhas e cupons oficiais. Confira as condições de cada oportunidade.' : trendingPage ? 'Promoções do que mais está sendo procurado agora, em todas as lojas.' : 'A compra é sempre finalizada na loja de origem.'}/>
+    <PageHeading title={title} text={kabum ? 'Ofertas com preço conferido na loja, campanhas e cupons oficiais.' : trendingPage ? 'Promoções do que mais está sendo procurado agora, em todas as lojas.' : 'A compra é sempre finalizada na loja de origem.'}/>
     {route.store && promotions.error && <Failure error={promotions.error} retry={promotions.retry}/>}
     {route.store && !!promotions.data?.items.length && <section className="section"><SectionHeading title="Campanhas e cupons da loja"/><div className="promo-grid">{promotions.data.items.map(p => <PromotionCard key={p.id} promotion={p}/>)}</div></section>}
     <div className="catalog-layout"><aside className="filter-panel">{filters()}</aside>
@@ -55,7 +57,7 @@ export default function Catalog() {
         <div className="results-toolbar"><span><strong>{state.data?.total ?? '…'}</strong> {state.data?.total === 1 ? 'oferta' : 'ofertas'}</span><button className="button secondary mobile-filter" onClick={() => dialog.current?.showModal()}><Icon name="filter" size={16}/>Filtros{active.length > 0 && <span className="count">{active.length}</span>}</button>
           <label className="sort-label">Ordenar por<select value={sort} onChange={e => update('sort', e.target.value)}><option value="featured">Destaques</option><option value="best_selling">Mais vendidos</option><option value="recent">Mais recentes</option><option value="discount">Maior desconto</option><option value="price_asc">Menor preço</option><option value="price_desc">Maior preço</option></select></label></div>
         {active.length > 0 && <div className="filter-chips">{active.map(([k, v]) => <button key={k} onClick={() => update(k, '')} aria-label={`Remover filtro ${chipLabel(k, v)}`}>{chipLabel(k, v)}<Icon name="close" size={14}/></button>)}</div>}
-        {state.error ? <Failure error={state.error} retry={state.retry}/> : state.loading && !state.data ? <Loading count={6}/> : !state.data?.items.length ? <Empty title={kabum ? 'Veja as campanhas e cupons desta loja' : 'Nenhuma oferta com esses filtros'} text={kabum ? 'Produtos de catálogo não são publicados em massa. As campanhas disponíveis aparecem acima.' : 'Tente remover algum filtro ou buscar por outro termo.'}/>
+        {state.error ? <Failure error={state.error} retry={state.retry}/> : state.loading && !state.data ? <Loading count={6}/> : !state.data?.items.length ? <Empty title={trendingPage ? 'Estamos atualizando o que está em alta' : 'Nenhuma oferta com esses filtros'} text={trendingPage ? 'Enquanto isso, veja abaixo os destaques do momento.' : 'Tente remover algum filtro ou buscar por outro termo.'}/>
           : <><div className={`deal-grid ${state.loading ? 'refreshing' : ''}`} aria-busy={state.loading}>{state.data.items.map(d => <DealCard key={d.id} deal={d}/>)}</div><Pagination page={page} total={state.data.total} pageSize={PAGE_SIZE} onPage={n => update('page', String(n))}/></>}
         {few && extra.length > 0 && <section className="section suggestions"><SectionHeading title={state.data?.total ? 'Você também pode gostar' : 'Ofertas em destaque'} to="/ofertas"/><div className="deal-grid">{extra.map(d => <DealCard key={d.id} deal={d}/>)}</div></section>}
       </section></div>

@@ -70,7 +70,7 @@ async def poll_source(connector: SourceConnector, settings: Settings) -> None:
                 novas=result.created,
                 duplicatas=result.duplicates,
             )
-            if settings.enable_telegram_publish:
+            if settings.enable_telegram_publish and getattr(connector, "telegram", True):
                 posted = 0
                 cap = max(0, settings.telegram_publish_per_poll)
                 for opp in result.opportunities:

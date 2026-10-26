@@ -19,7 +19,7 @@ from app.core.db import get_session_factory, utcnow
 from app.core.logging import get_logger
 from app.core.money import money
 from app.models.entities import Opportunity, Product, PublishedDeal
-from app.sources.mlapi import MlApi, ml_api_enabled
+from app.sources.mlapi import MlApi, RateLimited, ml_api_enabled
 from app.sources.mlofficial import gallery_of, ranking_label, root_category
 from app.storefront.taxonomy import ML_ROOT_KEYS
 
@@ -103,6 +103,10 @@ async def enrich_batch(settings: Settings, *, api: MlApi | None = None, now: dat
         for opp_id, catalog_id, native, prices in targets:
             try:
                 updates[opp_id] = await details(api, catalog_id, native, prices)
+            except RateLimited:
+                # O ML pediu pausa: grava o que já veio e continua no próximo ciclo.
+                log.warning("ml_enrich_rate_limited", done=len(updates))
+                break
             except Exception as exc:
                 log.warning("ml_enrich_item", catalog_id=catalog_id, error=str(exc)[:160])
                 if "401" in str(exc) or "OAuth" in str(exc):

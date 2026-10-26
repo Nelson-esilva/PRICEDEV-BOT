@@ -214,3 +214,14 @@ def test_same_item_different_captions_share_identity():
         price=100,
         listed=400,
     )
+
+
+def test_title_skips_checkout_instructions():
+    from app.inbox.parse import parse_deal
+
+    body = (
+        "🥈 SÓ COMPRA NA FARMACIA SE DEIXAR O RIM\n⚠️desconto aplicado na finalização da compra\n\n"
+        "Protetor Solar Facial Neutrogena Sun Fresh Derm Care Sem Cor FPS 70 40g\n\n"
+        '💡selecione "Programe e Poupe"\npor 41,24 em 2x sem juros\nhttps://link.amazon/B06eMphNO'
+    )
+    assert parse_deal(body).title.startswith("Protetor Solar Facial Neutrogena")

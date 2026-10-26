@@ -98,3 +98,51 @@ async def test_ranking_label_and_brand_rankings(monkeypatch):
     assert await ranking_label(api, "MLB3") == "Monitores"
     brand = await details(api, "MLB5", "MLB5")
     assert brand["rank_position"] is None
+
+
+async def test_mlapi_retries_429_then_gives_up(monkeypatch):
+    import httpx
+
+    from app.core.config import Settings
+    from app.sources import mlapi
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(429, headers={"retry-after": "0"})
+        return httpx.Response(200, json={"ok": True})
+
+    async def no_sleep(_):
+        return None
+
+    async def fake_token(self):
+        return "t"
+
+    monkeypatch.setattr(mlapi.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(mlapi.MlApi, "token", fake_token)
+    monkeypatch.setattr(mlapi, "_bucket", mlapi.TokenBucket(1000))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        api = mlapi.MlApi(Settings(), client=client)
+        assert await api.get("/x") == {"ok": True} and calls["n"] == 3
+        calls["n"] = -10
+        try:
+            await api.get("/y")
+            raise AssertionError("deveria desistir")
+        except mlapi.RateLimited:
+            pass
+
+
+def test_trend_match_needs_phrase_and_skips_accessories():
+    terms = ["notebook", "controle bluetooth", "cadeira gamer"]
+    assert trend_of("Notebook Lenovo IdeaPad 15", terms) == "notebook"
+    assert trend_of("Mochila para Notebook 15.6 Executiva", terms) is None
+    assert trend_of("Caixa de Som Bluetooth com controle remoto", terms) is None
+    assert trend_of("Controle Bluetooth para PS4", terms) == "controle bluetooth"
+    assert trend_of("Cadeira Gamer Husky Tempest", terms) == "cadeira gamer"
+
+
+def test_single_word_trend_must_name_the_product():
+    assert trend_of("Notebook Gamer 15,6 Intel", ["notebook"]) == "notebook"
+    assert trend_of("Case Gaveta HD SSD 2.5 USB 3.0 Externo notebook", ["notebook"]) is None

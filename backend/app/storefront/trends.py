@@ -15,7 +15,8 @@ from pathlib import Path
 from app.core.db import utcnow
 
 TRENDS_FILE = Path(__file__).resolve().parents[2] / "data" / "ml_trends.json"
-MAX_AGE = timedelta(hours=12)
+# Termos mudam devagar; 48 h aguenta uma falha temporária da API sem zerar o "Em alta".
+MAX_AGE = timedelta(hours=48)
 _cache: dict = {"mtime": None, "terms": []}
 
 
@@ -58,11 +59,22 @@ def load_trends() -> list[str]:
     return _cache["terms"]
 
 
+HEAD_WORDS = 3
+# Palavra antes do termo que indica acessório: "mochila PARA notebook", "capa DE celular".
+_ACCESSORY_LINK = frozenset({"para", "pra", "p", "de", "do", "da", "com", "compativel", "suporte"})
+
+
 def trend_of(name: str, terms: list[str]) -> str | None:
-    """Primeiro termo em alta cujas palavras estão todas no título (ordem livre, sem acento)."""
-    words = set(fold(name).split())
+    """Primeiro termo em alta que aparece junto e na ordem no título, sem ser acessório dele."""
+    words = fold(name).split()
     for term in terms:
         needed = fold(term).split()
-        if needed and all(word in words for word in needed):
-            return term
+        size = len(needed)
+        # Termo de uma palavra só vale como nome do produto (início do título): "Notebook Gamer", não
+        # "Case de HD ... notebook". Frases ("cadeira gamer") e modelos com dígito ("ps5") valem em qualquer posição.
+        anywhere = size > 1 or any(ch.isdigit() for ch in needed[0])
+        last = len(words) - size + 1 if anywhere else min(len(words), HEAD_WORDS)
+        for start in range(max(0, last)):
+            if words[start:start + size] == needed and (start == 0 or words[start - 1] not in _ACCESSORY_LINK):
+                return term
     return None

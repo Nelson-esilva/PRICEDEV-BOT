@@ -19,7 +19,7 @@ from app.storefront.trends import load_trends, trend_of
 
 log = get_logger("storefront")
 
-PUBLIC_SOURCES = frozenset({"shopee", "mlhub", "mlofficial"})
+PUBLIC_SOURCES = frozenset({"shopee", "mlhub", "mlofficial", "grupos"})
 AFFILIATE_OK = frozenset({"converted", "official"})
 STORE_BY_SOURCE = {
     "shopee": "shopee",
@@ -30,7 +30,10 @@ STORE_LABELS = {
     "shopee": "Shopee",
     "mercadolivre": "Mercado Livre",
     "kabum": "KaBuM!",
+    "amazon": "Amazon",
 }
+# Promoções dos grupos: a loja sai do link de compra.
+_STORE_HOSTS = (("amazon.", "amazon"), ("kabum.com.br", "kabum"), ("awin1.com", "kabum"))
 
 
 def slugify(name: str, short_id: str) -> str:
@@ -42,11 +45,14 @@ def slugify(name: str, short_id: str) -> str:
 
 
 def store_of(opportunity: Opportunity) -> str:
+    if opportunity.source == "grupos":
+        url = (opportunity.original_purchase_url or opportunity.affiliate_url or "").lower()
+        return next((store for needle, store in _STORE_HOSTS if needle in url), "grupos")
     return STORE_BY_SOURCE.get(opportunity.source, opportunity.source)
 
 
-def infer_category(product_name: str, declared: str | None) -> str | None:
-    return category_of(product_name, declared)
+def infer_category(product_name: str, declared: str | None, official: str | None = None) -> str | None:
+    return category_of(product_name, declared, official)
 
 
 def discount_of(opportunity: Opportunity) -> tuple[Decimal | None, str | None]:
@@ -128,7 +134,8 @@ def qualifies(opportunity: Opportunity, settings: Settings) -> bool:
         return False
     if opportunity.classification in {"REJECTED", "EXPIRED"}:
         return False
-    if discount_of(opportunity)[0] is None and not (opportunity.coupon_code or "").strip():
+    # Grupos já selecionam promoções; sem preço "de" a oferta entra sem selo de desconto.
+    if opportunity.source != "grupos" and discount_of(opportunity)[0] is None and not (opportunity.coupon_code or "").strip():
         return False
     if opportunity.affiliate_status not in AFFILIATE_OK:
         return False
@@ -152,8 +159,8 @@ def _apply_snapshot(
     deal.store = store_of(opportunity)
     deal.product_name = opportunity.product_name
     deal.merchant = opportunity.merchant or STORE_LABELS.get(deal.store)
-    # Categoria oficial do ML vence a inferência por palavra no título.
-    deal.category = opportunity.official_category or infer_category(opportunity.product_name, opportunity.category)
+    # O nome do produto no título decide; a categoria oficial do ML entra quando o título não diz.
+    deal.category = infer_category(opportunity.product_name, opportunity.category, opportunity.official_category)
     deal.image_url = opportunity.image_url
     deal.description = opportunity.description
     deal.coupon_code = opportunity.coupon_code
@@ -219,8 +226,10 @@ async def sync_catalog(session: AsyncSession, settings: Settings, *, now: dateti
         .scalars()
         .all()
     )
+    community_ttl = timedelta(hours=max(1, settings.community_ttl_hours))
     eligible = [item for item in opportunities if qualifies(item, settings)
-                and (item.fetched_at or item.analyzed_at or item.updated_at or moment) + ttl > moment]
+                and (item.fetched_at or item.analyzed_at or item.updated_at or moment)
+                + (community_ttl if item.source == "grupos" else ttl) > moment]
     eligible_ids = {item.id for item in eligible}
     existing = (
         (
@@ -257,7 +266,7 @@ async def sync_catalog(session: AsyncSession, settings: Settings, *, now: dateti
             deal,
             opportunity,
             now=moment,
-            ttl=ttl,
+            ttl=community_ttl if opportunity.source == "grupos" else ttl,
             # Cliques do site usam o id do deal; os do Telegram, o id da oportunidade.
             clicks_7d=clicks.get(deal.id or "", 0) + clicks.get(opportunity.id, 0),
             orders_30d=orders.get(opportunity.id, 0),
